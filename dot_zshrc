@@ -20,14 +20,14 @@ export LANG=en_US.UTF-8
 
 # Homebrew
 test -d /opt/homebrew && eval "$(/opt/homebrew/bin/brew shellenv)"
-# linuxbrew
+# Linuxbrew
 test -d /home/linuxbrew/.linuxbrew && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 
-# Update path
+# Update Path
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
-# Add iCloud to home directory
-test -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" && ln -sf "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" "$HOME/Documents/iCloud"
+# Add iCloud to Home
+test -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" && ! test -d "$HOME/iCloud" && ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" "$HOME/iCloud"
 
 checkinstall() {
   command -v $@ >/dev/null
