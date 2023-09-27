@@ -27,7 +27,7 @@ test -d /home/linuxbrew/.linuxbrew && eval "$(/home/linuxbrew/.linuxbrew/bin/bre
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
 # Add iCloud to home directory
-test -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" && ln -sf "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" "$HOME/iCloud"
+test -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" && ln -sf "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" "$HOME/Documents/iCloud"
 
 checkinstall() {
   command -v $@ >/dev/null
