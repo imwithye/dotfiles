@@ -25,6 +25,7 @@ test -d /home/linuxbrew/.linuxbrew && eval "$(/home/linuxbrew/.linuxbrew/bin/bre
 
 # Update Path
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
+export DOKKU_HOST=ssh.dokku.yiwei.dev
 
 # Add iCloud to Home
 test -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" && ! test -d "$HOME/iCloud" && ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" "$HOME/iCloud"
