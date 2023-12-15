@@ -42,6 +42,10 @@ if checkinstall go; then
   mkdir -p $GOPATH
 fi
 
+if checkinstall conda; then
+  eval "$(conda "shell.$(basename "${SHELL}")" hook)"
+fi
+
 # User configuration
 if [ -f $HOME/.zshrc.local ]; then
   source $HOME/.zshrc.local
