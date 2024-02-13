@@ -25,7 +25,6 @@ test -d /home/linuxbrew/.linuxbrew && eval "$(/home/linuxbrew/.linuxbrew/bin/bre
 
 # Update Path
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
-export DOKKU_HOST=ssh.dokku.yiwei.dev
 
 # Add iCloud to Home
 test -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" && ! test -d "$HOME/iCloud" && ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" "$HOME/iCloud"
@@ -38,8 +37,13 @@ if checkinstall go; then
   export GOPATH=$HOME/.local/go
   export GO111MODULE=on
   export GOPROXY=https://goproxy.cn
-  export PATH=$PATH:$GOPATH/bin
+  export PATH=$GOPATH/bin:$PATH
   mkdir -p $GOPATH
+fi
+
+if checkinstall /usr/libexec/java_home; then
+  export JAVA_HOME=$(/usr/libexec/java_home)
+  export PATH=$JAVA_HOME/bin:$PATH
 fi
 
 if checkinstall conda; then
