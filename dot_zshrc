@@ -41,11 +41,6 @@ if checkinstall go; then
   mkdir -p $GOPATH
 fi
 
-if checkinstall /usr/libexec/java_home; then
-  export JAVA_HOME=$(/usr/libexec/java_home)
-  export PATH=$JAVA_HOME/bin:$PATH
-fi
-
 if checkinstall conda; then
   eval "$(conda "shell.$(basename "${SHELL}")" hook)"
 fi
