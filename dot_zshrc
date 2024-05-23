@@ -45,6 +45,10 @@ if checkinstall conda; then
   eval "$(conda "shell.$(basename "${SHELL}")" hook)"
 fi
 
+if checkinstall kubectl; then
+  alias k=kubectl
+fi
+
 # User configuration
 if [ -f $HOME/.zshrc.local ]; then
   source $HOME/.zshrc.local
