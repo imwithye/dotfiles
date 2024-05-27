@@ -26,6 +26,10 @@ test -d /home/linuxbrew/.linuxbrew && eval "$(/home/linuxbrew/.linuxbrew/bin/bre
 # Update Path
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
+# PNPM
+export PNPM_PATH=$HOME/.pnpm
+export PATH=$PATH:$PNPM_PATH
+
 # Add iCloud to Home
 test -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" && ! test -d "$HOME/iCloud" && ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" "$HOME/iCloud"
 
