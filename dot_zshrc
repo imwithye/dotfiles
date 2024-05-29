@@ -27,7 +27,7 @@ test -d /home/linuxbrew/.linuxbrew && eval "$(/home/linuxbrew/.linuxbrew/bin/bre
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
 # PNPM
-export PNPM_PATH=$HOME/.pnpm
+export PNPM_HOME=$HOME/.pnpm
 export PATH=$PATH:$PNPM_PATH
 
 # Add iCloud to Home
