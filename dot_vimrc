@@ -1,0 +1,47 @@
+" Set colorscheme
+colorscheme industry
+
+" Set encoding
+set encoding=utf-8
+
+" Enable syntax highlighting
+syntax on
+
+" Show line numbers
+set number
+
+" Set tabs and indentation
+set tabstop=4       " Number of spaces that a <Tab> in the file counts for
+set shiftwidth=4    " Number of spaces to use for each step of (auto)indent
+set expandtab       " Use spaces instead of tabs
+
+" Enable line highlighting
+set cursorline
+
+" Enable search highlighting
+set hlsearch
+set incsearch
+
+" Enable mouse support
+set mouse=a
+
+" Enable auto-completion menu
+set wildmenu
+set wildmode=list:longest
+
+" Enable syntax folding
+set foldmethod=syntax
+
+" Set default split directions
+set splitbelow
+set splitright
+
+" Enable line wrapping
+set wrap
+
+" Set scrolloff for better navigation
+set scrolloff=8
+
+" Set timeout for key mappings
+set timeoutlen=500
+
