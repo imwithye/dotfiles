@@ -51,6 +51,7 @@ fi
 
 if checkinstall kubectl; then
   alias k=kubectl
+  alias kshell='kubectl run kshell --image=nicolaka/netshoot --rm -it'
 fi
 
 if checkinstall lazydocker; then
