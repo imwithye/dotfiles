@@ -76,9 +76,7 @@ nmap <leader>t :NERDTreeToggle<CR>
 nmap <leader>f :Files<CR>
 nmap <leader>s :split<CR>
 nmap <leader>v :vsplit<CR>
-nmap <leader>w :w<CR>
-nmap <leader>Y "+y
-nmap <leader>P "+p
+nmap <C-r> :e!<CR>
 
 inoremap <silent><expr> <CR> coc#pum#visible() ? coc#pum#confirm()
                               \: "\<C-g>u\<CR>\<c-r>=coc#on_enter()\<CR>"
