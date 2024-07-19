@@ -55,6 +55,7 @@ nnoremap <CR> :noh<CR><CR>
 
 " Enable mouse support
 set mouse=a
+set ttymouse=xterm2
 
 " Enable auto-completion menu
 set wildmenu
