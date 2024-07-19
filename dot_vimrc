@@ -72,7 +72,8 @@ set timeoutlen=1000
 
 " Set keys
 let mapleader=";"
-nmap <leader>t :NERDTreeToggle<CR>
+nmap <leader>p :NERDTreeToggle<CR>
+nmap <leader>t :terminal<CR>
 nmap <leader>f :Files<CR>
 nmap <leader>s :split<CR>
 nmap <leader>v :vsplit<CR>
@@ -82,6 +83,7 @@ inoremap <silent><expr> <CR> coc#pum#visible() ? coc#pum#confirm()
                               \: "\<C-g>u\<CR>\<c-r>=coc#on_enter()\<CR>"
 
 if has("gui_macvim")
+    set guifont=MesloLGS\ NF:h14
     set guioptions=
     let g:coc_node_path = '/opt/homebrew/bin/node'
 endif
