@@ -1,4 +1,5 @@
 call plug#begin()
+Plug 'tpope/vim-sleuth'
 Plug 'preservim/nerdtree'
 Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
 Plug 'junegunn/fzf.vim'
@@ -36,6 +37,9 @@ set listchars=tab:>-,trail:·,extends:>,precedes:<,eol:$
 set autoread
 
 " Set tabs and indentation
+filetype plugin indent on
+set autoindent
+set smartindent
 set tabstop=4       " Number of spaces that a <Tab> in the file counts for
 set shiftwidth=4    " Number of spaces to use for each step of (auto)indent
 set expandtab       " Use spaces instead of tabs
@@ -71,18 +75,8 @@ nmap f :Files<CR>
 nmap s :split<CR>
 nmap v :vsplit<CR>
 
-" Use arrow key to select and enter to complete
-inoremap <silent><expr> <Down>
-      \ coc#pum#visible() ? coc#pum#next(1) :
-      \ CheckBackspace() ? "\<Down>" :
-      \ coc#refresh()
-inoremap <expr><Up> coc#pum#visible() ? coc#pum#prev(1) : "\<Up>"
 inoremap <silent><expr> <CR> coc#pum#visible() ? coc#pum#confirm()
                               \: "\<C-g>u\<CR>\<c-r>=coc#on_enter()\<CR>"
-function! CheckBackspace() abort
-  let col = col('.') - 1
-  return !col || getline('.')[col - 1]  =~# '\s'
-endfunction
 
 if has("gui_macvim")
     set guioptions=
