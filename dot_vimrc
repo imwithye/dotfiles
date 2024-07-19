@@ -73,9 +73,12 @@ set timeoutlen=1000
 " Set keys
 let mapleader=";"
 nmap <leader>t :NERDTreeToggle<CR>
-nmap f :Files<CR>
-nmap s :split<CR>
-nmap v :vsplit<CR>
+nmap <leader>f :Files<CR>
+nmap <leader>s :split<CR>
+nmap <leader>v :vsplit<CR>
+nmap <leader>w :w<CR>
+nmap <leader>Y "+y
+nmap <leader>P "+p
 
 inoremap <silent><expr> <CR> coc#pum#visible() ? coc#pum#confirm()
                               \: "\<C-g>u\<CR>\<c-r>=coc#on_enter()\<CR>"
