@@ -50,6 +50,7 @@ set cursorline
 " Enable search highlighting
 set hlsearch
 set incsearch
+nnoremap <CR> :noh<CR><CR>
 
 " Enable mouse support
 set mouse=a
