@@ -1,3 +1,11 @@
+call plug#begin()
+Plug 'preservim/nerdtree'
+Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
+Plug 'junegunn/fzf.vim'
+Plug 'neoclide/coc.nvim', { 'branch': 'release' }
+Plug 'github/copilot.vim'
+call plug#end()
+
 " Set colorscheme
 set background=dark
 colorscheme retrobox
@@ -10,6 +18,14 @@ syntax on
 
 " Show line numbers
 set number
+set relativenumber
+
+" Show hidden chars
+set list
+set listchars=tab:>-,trail:·,extends:>,precedes:<,eol:$
+
+" Auto reload
+set autoread
 
 " Set tabs and indentation
 set tabstop=4       " Number of spaces that a <Tab> in the file counts for
@@ -30,19 +46,22 @@ set mouse=a
 set wildmenu
 set wildmode=list:longest
 
-" Enable syntax folding
-set foldmethod=syntax
-
 " Set default split directions
 set splitbelow
 set splitright
-
-" Enable line wrapping
-set wrap
 
 " Set scrolloff for better navigation
 set scrolloff=8
 
 " Set timeout for key mappings
-set timeoutlen=500
+set timeoutlen=1000
 
+" Set leader key
+let mapleader=";"
+nmap <Leader>t :NERDTreeToggle<CR>
+nmap <Leader>f :Files<CR>
+
+if has("gui_macvim")
+    set guioptions=
+    let g:coc_node_path = '/opt/homebrew/bin/node'
+endif

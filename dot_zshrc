@@ -57,6 +57,11 @@ if checkinstall kubectl; then
   alias kshell='kubectl run kshell --image=nicolaka/netshoot --rm -it'
 fi
 
+if checkinstall fzf; then
+  alias fzf='fzf --height 40% --reverse --border'
+  alias fzf-vim='vim $(fzf)'
+fi
+
 if checkinstall lazydocker; then
   alias lzd=lazydocker
 fi
