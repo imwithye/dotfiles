@@ -13,6 +13,14 @@ colorscheme retrobox
 " Set encoding
 set encoding=utf-8
 
+" Some servers have issues with backup files
+set nobackup
+set nowritebackup
+
+" Always show the signcolumn, otherwise it would shift the text each time
+" diagnostics appear/become resolved
+set signcolumn=yes
+
 " Enable syntax highlighting
 syntax on
 
@@ -56,10 +64,25 @@ set scrolloff=8
 " Set timeout for key mappings
 set timeoutlen=1000
 
-" Set leader key
+" Set keys
 let mapleader=";"
-nmap <Leader>t :NERDTreeToggle<CR>
-nmap <Leader>f :Files<CR>
+nmap <leader>t :NERDTreeToggle<CR>
+nmap f :Files<CR>
+nmap s :split<CR>
+nmap v :vsplit<CR>
+
+" Use arrow key to select and enter to complete
+inoremap <silent><expr> <Down>
+      \ coc#pum#visible() ? coc#pum#next(1) :
+      \ CheckBackspace() ? "\<Down>" :
+      \ coc#refresh()
+inoremap <expr><Up> coc#pum#visible() ? coc#pum#prev(1) : "\<Up>"
+inoremap <silent><expr> <CR> coc#pum#visible() ? coc#pum#confirm()
+                              \: "\<C-g>u\<CR>\<c-r>=coc#on_enter()\<CR>"
+function! CheckBackspace() abort
+  let col = col('.') - 1
+  return !col || getline('.')[col - 1]  =~# '\s'
+endfunction
 
 if has("gui_macvim")
     set guioptions=
