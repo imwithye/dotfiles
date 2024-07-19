@@ -59,6 +59,7 @@ if checkinstall kubectl; then
 fi
 
 if checkinstall fzf; then
+  source <(fzf --zsh)
   alias fzf='fzf --reverse --preview "cat {}"'
   if checkinstall bat; then
     alias fzf='fzf --reverse --preview "bat --style=numbers,changes --color=always {}"'
