@@ -1,5 +1,6 @@
 " Set colorscheme
-colorscheme industry
+set background=dark
+colorscheme retrobox
 
 " Set encoding
 set encoding=utf-8
