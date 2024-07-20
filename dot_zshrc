@@ -15,7 +15,6 @@ source $ZSH/oh-my-zsh.sh
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f $HOME/.p10k.zsh ]] || source $HOME/.p10k.zsh
 
-export TERM=screen-256color
 export LC_CTYPE=en_US.UTF-8
 export LANG=en_US.UTF-8
 
@@ -36,6 +35,11 @@ export PATH=$PATH:$PNPM_HOME
 
 # Add iCloud to Home
 test -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" && ! test -d "$HOME/iCloud" && ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" "$HOME/iCloud"
+
+# alacritty will cause issue on SSH
+if [[ "$TERM" == "alacritty" ]]; then
+  alias ssh='TERM=xterm-256color ssh'
+fi
 
 checkinstall() {
   command -v $@ >/dev/null
