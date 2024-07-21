@@ -7,8 +7,10 @@ tmux_conf_theme_window_status_bg="black"
 tmux_conf_theme_status_right_fg="cyan,red,yellow"
 tmux_conf_theme_status_right_bg="black,black,black"
 
+set -g history-limit 100000
+set -g mouse on
+
 bind m if-shell "tmux show -g | grep -q '^mouse on'" \
     "set -g mouse off; display 'Mouse support disabled'" \
     "set -g mouse on; display 'Mouse support enabled'"
 
-set -g history-limit 100000
