@@ -62,6 +62,10 @@ if checkinstall kubectl; then
   alias kshell='kubectl run kshell --image=nicolaka/netshoot --rm -it'
 fi
 
+if checkinstall kubectx; then
+  alias kx=kubectx
+fi
+
 if checkinstall fzf; then
   source <(fzf --zsh)
   alias fzf='fzf --reverse --preview "cat {}"'
