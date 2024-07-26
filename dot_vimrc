@@ -84,7 +84,6 @@ inoremap <silent><expr> <CR> coc#pum#visible() ? coc#pum#confirm()
                               \: "\<C-g>u\<CR>\<c-r>=coc#on_enter()\<CR>"
 
 if has("gui_macvim")
-    set guifont=MesloLGS\ NF:h14
     set guioptions=
     let g:coc_node_path = '/opt/homebrew/bin/node'
 endif
