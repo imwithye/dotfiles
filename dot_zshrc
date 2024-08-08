@@ -45,6 +45,10 @@ checkinstall() {
   command -v $@ >/dev/null
 }
 
+if checkinstall nvim; then
+  alias vim=nvim
+fi
+
 if checkinstall go; then
   export GOPATH=$HOME/.local/go
   export GO111MODULE=on
