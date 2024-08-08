@@ -1,9 +1,6 @@
 call plug#begin()
-Plug 'tpope/vim-sleuth'
-Plug 'preservim/nerdtree'
 Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
 Plug 'junegunn/fzf.vim'
-Plug 'neoclide/coc.nvim', { 'branch': 'release' }
 Plug 'github/copilot.vim'
 call plug#end()
 
@@ -73,16 +70,9 @@ set timeoutlen=1000
 
 " Set keys
 let mapleader=";"
-nmap <leader>p :NERDTreeToggle<CR>
 nmap <leader>t :terminal<CR>
 nmap <leader>f :Files<CR>
 nmap <leader>s :split<CR>
 nmap <leader>v :vsplit<CR>
 nmap <C-r> :e!<CR>
 
-inoremap <silent><expr> <CR> coc#pum#visible() ? coc#pum#confirm()
-                              \: "\<C-g>u\<CR>\<c-r>=coc#on_enter()\<CR>"
-
-if has("gui_macvim")
-    let g:coc_node_path = '/opt/homebrew/bin/node'
-endif
