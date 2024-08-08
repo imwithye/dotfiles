@@ -19,4 +19,10 @@
     type = "git-repo"
     url = "https://github.com/gpakosz/.tmux.git"
     refreshPeriod = "168h"
+[".config/nvim"]
+    type = "archive"
+    url = "https://github.com/NvChad/starter/archive/master.tar.gz"
+    exact = true
+    stripComponents = 1
+    refreshPeriod = "168h"
 
