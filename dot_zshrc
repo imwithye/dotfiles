@@ -47,6 +47,7 @@ checkinstall() {
 
 if checkinstall nvim; then
   alias vim=nvim
+  export EDITOR=nvim
 fi
 
 if checkinstall go; then
