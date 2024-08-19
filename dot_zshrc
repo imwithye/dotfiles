@@ -66,6 +66,7 @@ if checkinstall conda; then
 fi
 
 if checkinstall kubectl; then
+  export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
   alias k=kubectl
   alias kshell='kubectl run kshell --image=nicolaka/netshoot --rm -it'
 fi
