@@ -56,7 +56,6 @@ fi
 if checkinstall go; then
   export GOPATH=$HOME/.local/go
   export GO111MODULE=on
-  export GOPROXY=https://goproxy.cn
   export PATH=$GOPATH/bin:$PATH
   mkdir -p $GOPATH
 fi
