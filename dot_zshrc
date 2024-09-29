@@ -9,7 +9,7 @@ fi
 export ZSH=$HOME/.oh-my-zsh
 zstyle ':omz:update' mode disabled
 ZSH_THEME="powerlevel10k/powerlevel10k"
-plugins=(zsh-syntax-highlighting docker zsh-autosuggestions z)
+plugins=(zsh-syntax-highlighting docker z)
 source $ZSH/oh-my-zsh.sh
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
@@ -31,6 +31,11 @@ test -d /opt/homebrew/opt/ruby/bin && export PATH="/opt/homebrew/opt/ruby/bin:$P
 
 # Update Path
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
+
+# Update KUBECONFIG
+if [ -d "$HOME/.config/kubeconfig" ]; then
+  export KUBECONFIG=$(find "$HOME/.config/kubeconfig" -type f -name '*' | tr '\n' ':' | sed 's/:$//')
+fi
 
 # PNPM
 export PNPM_HOME=$HOME/.pnpm
@@ -65,7 +70,6 @@ if checkinstall conda; then
 fi
 
 if checkinstall kubectl; then
-  export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
   alias k=kubectl
   alias kshell='kubectl run kshell --image=nicolaka/netshoot --rm -it'
 fi
