@@ -34,7 +34,7 @@ export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
 # Update KUBECONFIG
 if [ -d "$HOME/.config/kubeconfig" ]; then
-  export KUBECONFIG=$(find "$HOME/.config/kubeconfig" -type f -name '*' | tr '\n' ':' | sed 's/:$//')
+  export KUBECONFIG=$(find "$HOME/.config/kubeconfig" -type f \( -name '*.kubeconfig' -o -name '*.yaml' -o -name '*.yml' \) | tr '\n' ':' | sed 's/:$//')
 fi
 
 # PNPM
