@@ -33,8 +33,8 @@ test -d /opt/homebrew/opt/ruby/bin && export PATH="/opt/homebrew/opt/ruby/bin:$P
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
 # Update KUBECONFIG
-if [ -d "$HOME/.config/kubeconfig" ]; then
-  export KUBECONFIG=$(find "$HOME/.config/kubeconfig" -type f \( -name '*.kubeconfig' -o -name '*.yaml' -o -name '*.yml' \) | tr '\n' ':' | sed 's/:$//')
+if [ -e "$HOME/.config/kubeconfig/k8s.yaml" ]; then
+  export KUBECONFIG=$HOME/.config/kubeconfig/k8s.yaml
 fi
 
 # PNPM
