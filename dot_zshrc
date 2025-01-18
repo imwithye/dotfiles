@@ -53,10 +53,6 @@ checkinstall() {
   command -v $@ >/dev/null
 }
 
-if checkinstall op; then
-  export OPENAI_API_KEY=$(op item get "OpenAI" --vault Private --fields PAT --reveal)
-fi
-
 if checkinstall nvim; then
   alias vim=nvim
   export EDITOR=nvim
@@ -95,6 +91,12 @@ fi
 
 if checkinstall lazydocker; then
   alias lzd=lazydocker
+fi
+
+# 1Password Environment Variables
+if checkinstall op; then
+  export OPENAI_API_KEY=$(op item get "OpenAI" --vault Private --fields PAT --reveal)
+  export GITHUB_TOKEN=$(op item get "GitHub" --vault Private --fields PAT --reveal)
 fi
 
 # User configuration
