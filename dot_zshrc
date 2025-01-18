@@ -71,6 +71,9 @@ fi
 
 if checkinstall conda; then
   eval "$(conda "shell.$(basename "${SHELL}")" hook)"
+  if conda env list | grep -q "^dev "; then
+    conda activate dev
+  fi
 fi
 
 if checkinstall kubectl; then
