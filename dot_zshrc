@@ -45,7 +45,7 @@ export PATH=$PATH:$PNPM_HOME
 test -d "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" && ! test -d "$HOME/iCloud" && ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/" "$HOME/iCloud"
 
 # alacritty will cause issue on SSH
-if [[ "$TERM" == "alacritty" ]]; then
+if [[ "$TERM" == "alacritty" || "$TERM" == "xterm-ghostty" ]]; then
   alias ssh='TERM=xterm-256color ssh'
 fi
 
@@ -84,6 +84,7 @@ fi
 if checkinstall kubectl; then
   alias k=kubectl
   alias kshell='kubectl run kshell --image=nicolaka/netshoot --rm -it'
+  export PATH=$HOME/.krew/bin:$PATH
 fi
 
 if checkinstall kubectx; then
