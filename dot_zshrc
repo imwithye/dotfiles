@@ -82,6 +82,7 @@ if checkinstall conda; then
 fi
 
 if checkinstall kubectl; then
+  kubectl config use-context orbstack >/dev/null 2>&1 || true
   alias k=kubectl
   alias kshell='kubectl run kshell --image=nicolaka/netshoot --rm -it'
   export PATH=$HOME/.krew/bin:$PATH
