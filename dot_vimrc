@@ -1,78 +1,51 @@
-call plug#begin()
-Plug 'junegunn/fzf', { 'do': { -> fzf#install() } }
-Plug 'junegunn/fzf.vim'
-Plug 'github/copilot.vim'
-call plug#end()
+" Simple, yet useful, Vim configuration without external plugins.
 
-" Set colorscheme
-set background=dark
-colorscheme retrobox
-
-" Set encoding
-set encoding=utf-8
-
-" Some servers have issues with backup files
-set nobackup
-set nowritebackup
-set noswapfile
-
-" Always show the signcolumn, otherwise it would shift the text each time
-" diagnostics appear/become resolved
-set signcolumn=yes
-
-" Enable syntax highlighting
+" Enable syntax highlighting.
 syntax on
 
-" Show line numbers
+" Show line numbers.
 set number
-set relativenumber
 
-" Show hidden chars
-set list
-set listchars=tab:>-,trail:·,extends:>,precedes:<,eol:$
-
-" Auto reload
-set autoread
-
-" Set tabs and indentation
-filetype plugin indent on
-set autoindent
+" Set indentation rules.
+" Use 4 spaces for tabs.
+set tabstop=4
+" Use 4 spaces for auto-indenting.
+set shiftwidth=4
+" Use spaces instead of tab characters.
+set expandtab
+" Enable smart auto-indenting.
 set smartindent
-set tabstop=4       " Number of spaces that a <Tab> in the file counts for
-set shiftwidth=4    " Number of spaces to use for each step of (auto)indent
-set expandtab       " Use spaces instead of tabs
+" Enable auto-indenting.
+set autoindent
 
-" Enable line highlighting
-set cursorline
-
-" Enable search highlighting
+" Configure search settings.
+" Highlight search results.
 set hlsearch
+" Enable incremental search (search as you type).
 set incsearch
-nnoremap <CR> :noh<CR><CR>
+" Ignore case when searching, unless a capital letter is used.
+set ignorecase
+set smartcase
 
-" Enable mouse support
+" Enable mouse support in all modes.
 set mouse=a
-set ttymouse=xterm2
 
-" Enable auto-completion menu
-set wildmenu
-set wildmode=list:longest
+" Show the cursor position in the status line.
+set ruler
 
-" Set default split directions
-set splitbelow
-set splitright
+" Show matching brackets and parentheses.
+set showmatch
 
-" Set scrolloff for better navigation
-set scrolloff=8
+" Allow backspacing over everything in insert mode.
+set backspace=indent,eol,start
 
-" Set timeout for key mappings
-set timeoutlen=1000
+" Use UTF-8 encoding.
+set encoding=utf-8
 
-" Set keys
-let mapleader=";"
-nmap <leader>t :terminal<CR>
-nmap <leader>f :Files<CR>
-nmap <leader>s :split<CR>
-nmap <leader>v :vsplit<CR>
-nmap <C-r> :e!<CR>
+" Enable filetype detection, which allows for filetype-specific settings.
+filetype plugin indent on
 
+" Disable the creation of swap files.
+set noswapfile
+" Disable the creation of backup files.
+set nobackup
