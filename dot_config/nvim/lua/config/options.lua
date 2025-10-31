@@ -8,6 +8,23 @@ vim.g.neovide_cursor_trail_size = 0
 vim.g.neovide_cursor_animate_in_insert_mode = false
 vim.g.neovide_cursor_animate_command_line = false
 
+-- neovide zoom
+if vim.g.neovide == true then
+  vim.api.nvim_set_keymap(
+    "n",
+    "<D-=>",
+    ":lua vim.g.neovide_scale_factor = math.min(vim.g.neovide_scale_factor + 0.1,  1.0)<CR>",
+    { silent = true }
+  )
+  vim.api.nvim_set_keymap(
+    "n",
+    "<D-->",
+    ":lua vim.g.neovide_scale_factor = math.max(vim.g.neovide_scale_factor - 0.1,  0.1)<CR>",
+    { silent = true }
+  )
+  vim.api.nvim_set_keymap("n", "<C-0>", ":lua vim.g.neovide_scale_factor = 1.0<CR>", { silent = true })
+end
+
 -- cmd + c, cmd + v, cmd + s support for neovide
 if vim.g.neovide then
   vim.keymap.set("n", "<D-s>", ":w<CR>") -- Save
