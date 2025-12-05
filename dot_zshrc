@@ -33,9 +33,7 @@ test -d /opt/homebrew/opt/ruby/bin && export PATH="/opt/homebrew/opt/ruby/bin:$P
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
 # Update KUBECONFIG
-if [ -e "$HOME/.config/kubeconfig/k8s.yaml" ]; then
-  export KUBECONFIG=$HOME/.config/kubeconfig/k8s.yaml
-fi
+export KUBECONFIG="$KUBECONFIG:$HOME/.kube/config:$HOME/.kube/homelab"
 
 # PNPM
 export PNPM_HOME=$HOME/.pnpm
