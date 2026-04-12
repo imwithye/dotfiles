@@ -78,6 +78,20 @@ if checkinstall kubectl; then
   alias k=kubectl
   alias kshell='kubectl run kshell --image=nicolaka/netshoot --rm -it'
   export PATH=$HOME/.krew/bin:$PATH
+
+  # kube-ps1: show current context in RPROMPT (only if installed)
+  for _kps1 in \
+    /home/linuxbrew/.linuxbrew/opt/kube-ps1/share/kube-ps1.sh \
+    /opt/homebrew/opt/kube-ps1/share/kube-ps1.sh \
+    /usr/share/kube-ps1/kube-ps1.sh; do
+    if [ -r "$_kps1" ]; then
+      source "$_kps1"
+      KUBE_PS1_SYMBOL_ENABLE=true
+      RPROMPT='%F{#7f849c}${SSH_TTY:+%n@%m }%f$(kube_ps1)'
+      break
+    fi
+  done
+  unset _kps1
 fi
 
 if checkinstall kubectx; then
