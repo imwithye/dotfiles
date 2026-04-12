@@ -87,7 +87,11 @@ if checkinstall kubectl; then
     if [ -r "$_kps1" ]; then
       source "$_kps1"
       KUBE_PS1_SYMBOL_ENABLE=true
-      RPROMPT='%F{#7f849c}${SSH_TTY:+%n@%m }%f$(kube_ps1)'
+      if [[ -n $TMUX ]]; then
+        RPROMPT='%F{#7f849c}${SSH_TTY:+%n }%f$(kube_ps1)'
+      else
+        RPROMPT='%F{#7f849c}${SSH_TTY:+%n@%m }%f$(kube_ps1)'
+      fi
       break
     fi
   done
