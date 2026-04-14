@@ -12,6 +12,30 @@ set backspace=indent,eol,start
 set noswapfile nobackup
 set termguicolors
 
+" --- Autocomplete (current buffer only, auto-trigger) ---
+set completeopt=menuone,noinsert
+set shortmess+=c
+set complete=.
+set wildmenu wildmode=longest:full,full
+inoremap <expr> <CR> pumvisible() ? "\<C-y>" : "\<CR>"
+
+function! s:TriggerComplete()
+  if pumvisible()
+    return
+  endif
+  let l:col = col('.') - 1
+  if l:col < 1
+    return
+  endif
+  let l:char = getline('.')[l:col - 1]
+  let l:word = matchstr(getline('.')[:l:col - 1], '\w\+$')
+  if l:char ==# '.' || len(l:word) >= 2
+    call feedkeys("\<C-n>", 'n')
+  endif
+endfunction
+
+autocmd TextChangedI * call s:TriggerComplete()
+
 " --- Status Bar ---
 set laststatus=2
 set statusline=%#StatusMode#\ %{toupper(mode())}\ %#StatusLine#\ %f\ %m%r%=%y\ %l:%c\ %p%%
