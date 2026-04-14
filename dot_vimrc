@@ -11,6 +11,7 @@ set autoindent smartindent
 set encoding=utf-8
 set backspace=indent,eol,start
 set noswapfile nobackup
+set clipboard=unnamed
 set ttimeoutlen=10
 set termguicolors
 set laststatus=2
