@@ -1,51 +1,72 @@
-" Simple, yet useful, Vim configuration without external plugins.
+" Minimal vimrc — Catppuccin Mocha, single file, no plugins
 
-" Enable syntax highlighting.
+" --- Basics ---
 syntax on
-
-" Show line numbers.
-set number
-
-" Set indentation rules.
-" Use 4 spaces for tabs.
-set tabstop=4
-" Use 4 spaces for auto-indenting.
-set shiftwidth=4
-" Use spaces instead of tab characters.
-set expandtab
-" Enable smart auto-indenting.
-set smartindent
-" Enable auto-indenting.
-set autoindent
-
-" Configure search settings.
-" Highlight search results.
-set hlsearch
-" Enable incremental search (search as you type).
-set incsearch
-" Ignore case when searching, unless a capital letter is used.
-set ignorecase
-set smartcase
-
-" Enable mouse support in all modes.
-set mouse=a
-
-" Show the cursor position in the status line.
-set ruler
-
-" Show matching brackets and parentheses.
-set showmatch
-
-" Allow backspacing over everything in insert mode.
-set backspace=indent,eol,start
-
-" Use UTF-8 encoding.
-set encoding=utf-8
-
-" Enable filetype detection, which allows for filetype-specific settings.
 filetype plugin indent on
+set number
+set mouse=a
+set tabstop=4 shiftwidth=4 expandtab
+set autoindent smartindent
+set encoding=utf-8
+set backspace=indent,eol,start
+set noswapfile nobackup
+set termguicolors
 
-" Disable the creation of swap files.
-set noswapfile
-" Disable the creation of backup files.
-set nobackup
+" --- Status Bar ---
+set laststatus=2
+set statusline=%#StatusMode#\ %{toupper(mode())}\ %#StatusLine#\ %f\ %m%r%=%y\ %l:%c\ %p%%
+
+" --- Catppuccin Mocha ---
+" Base=#1e1e2e  Surface0=#313244  Surface1=#45475a
+" Text=#cdd6f4  Subtext0=#a6adc8  Overlay0=#6c7086
+" Blue=#89b4fa  Mauve=#cba6f7  Green=#a6e3a1  Peach=#fab387
+" Red=#f38ba8  Yellow=#f9e2af  Teal=#94e2d5  Lavender=#b4befe
+set background=dark
+
+" UI
+hi Normal       guifg=#cdd6f4 guibg=#1e1e2e
+hi LineNr       guifg=#45475a
+hi CursorLine   guibg=#313244
+hi CursorLineNr guifg=#cba6f7 guibg=#1e1e2e
+hi Visual       guibg=#45475a
+hi MatchParen   guifg=#1e1e2e guibg=#b4befe
+hi NonText      guifg=#45475a
+hi SpecialKey   guifg=#45475a
+hi VertSplit    guifg=#45475a guibg=#1e1e2e
+hi Directory    guifg=#89b4fa
+hi Title        guifg=#cba6f7 gui=bold
+
+" Search
+hi Search       guifg=#1e1e2e guibg=#f9e2af
+hi IncSearch    guifg=#1e1e2e guibg=#fab387
+
+" Status bar
+hi StatusLine   guifg=#1e1e2e guibg=#89b4fa gui=bold
+hi StatusLineNC guifg=#a6adc8 guibg=#313244 gui=NONE
+hi StatusMode   guifg=#1e1e2e guibg=#cba6f7 gui=bold
+
+" Popup menu
+hi Pmenu        guifg=#cdd6f4 guibg=#313244
+hi PmenuSel     guifg=#1e1e2e guibg=#89b4fa gui=bold
+
+" Messages
+hi WarningMsg   guifg=#fab387
+hi ErrorMsg     guifg=#f38ba8 guibg=#1e1e2e
+
+" Diff
+hi DiffAdd      guifg=#a6e3a1 guibg=#1e1e2e
+hi DiffChange   guifg=#f9e2af guibg=#1e1e2e
+hi DiffDelete   guifg=#f38ba8 guibg=#1e1e2e
+
+" Syntax
+hi Comment      guifg=#6c7086 gui=italic
+hi Constant     guifg=#fab387
+hi String       guifg=#a6e3a1
+hi Identifier   guifg=#cdd6f4
+hi Function     guifg=#89b4fa
+hi Statement    guifg=#cba6f7
+hi PreProc      guifg=#f38ba8
+hi Type         guifg=#f9e2af
+hi Special      guifg=#94e2d5
+hi Error        guifg=#f38ba8 guibg=#1e1e2e
+hi Todo         guifg=#f9e2af guibg=#1e1e2e gui=bold
