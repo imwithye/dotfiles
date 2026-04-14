@@ -56,11 +56,6 @@ if checkinstall op; then
   alias loadenv='loadenv'
 fi
 
-if checkinstall nvim; then
-  alias vim=nvim
-  export EDITOR=nvim
-fi
-
 if checkinstall neovide; then
   alias neovide='neovide --fork'
 fi

@@ -16,6 +16,103 @@ set termguicolors
 set laststatus=2
 set statusline=%#StatusMode#\ %{toupper(mode())}\ %#StatusLine#\ %f\ %m%r%=%y\ %l:%c\ %p%%
 
+" --- Shared helpers ---
+function! s:ProjectRoot()
+  let l:dir = expand('%:p:h')
+  if empty(l:dir) || !isdirectory(l:dir)
+    let l:dir = getcwd()
+  endif
+  let l:git = systemlist('git -C ' . shellescape(l:dir) . ' rev-parse --show-toplevel 2>/dev/null')
+  return !empty(l:git) ? l:git[0] : l:dir
+endfunction
+
+function! s:EnsurePropTypes()
+  if empty(prop_type_get('cp_sel'))
+    call prop_type_add('cp_sel', #{highlight: 'CPSel'})
+  endif
+  if empty(prop_type_get('cp_item'))
+    call prop_type_add('cp_item', #{highlight: 'CPItem'})
+  endif
+endfunction
+
+" --- File Explorer (Ctrl+E, netrw tree sidebar) ---
+let g:netrw_banner       = 0
+let g:netrw_liststyle     = 3
+let g:netrw_winsize       = 25
+let g:netrw_browse_split  = 4
+let g:netrw_altv          = 1
+let g:netrw_fastbrowse    = 0
+let g:netrw_mousemaps     = 0
+let g:netrw_special_syntax = 1
+let g:netrw_list_hide     = '\(^\|\s\s\)\zs\.\S\+,node_modules/,\.DS_Store'
+let g:netrw_hide          = 1
+
+function! s:NetrwWinId()
+  for l:info in getwininfo()
+    if getbufvar(l:info.bufnr, '&filetype') ==# 'netrw'
+      return l:info.winid
+    endif
+  endfor
+  return 0
+endfunction
+
+function! s:ExplorerTargetWinnr()
+  for l:win in range(1, winnr('$'))
+    if getwinvar(l:win, '&filetype') !=# 'netrw'
+      return l:win
+    endif
+  endfor
+  return 0
+endfunction
+
+function! s:ConfigureNetrwExplorer()
+  setlocal winfixwidth
+  execute 'vertical resize ' . g:netrw_winsize
+  let l:target = s:ExplorerTargetWinnr()
+  if l:target > 0
+    let g:netrw_chgwin = l:target
+  endif
+  nmap <buffer> <silent> <LeftMouse> <LeftMouse>
+  nmap <buffer> <silent> <2-LeftMouse> <LeftMouse><CR>
+endfunction
+
+function! s:CloseExplorer(winid)
+  let l:current = win_getid()
+  if win_gotoid(a:winid)
+    if winnr('$') > 1
+      close
+    else
+      enew
+    endif
+  endif
+  if win_id2win(l:current) > 0
+    call win_gotoid(l:current)
+  endif
+endfunction
+
+function! s:ToggleExplorer()
+  let l:explorer = s:NetrwWinId()
+  if l:explorer > 0
+    call s:CloseExplorer(l:explorer)
+    return
+  endif
+  let l:target = win_getid()
+  execute 'Lexplore ' . fnameescape(s:ProjectRoot())
+  let l:explorer = s:NetrwWinId()
+  if l:explorer > 0 && win_id2win(l:target) > 0
+    call win_gotoid(l:target)
+    let g:netrw_chgwin = winnr()
+    call win_gotoid(l:explorer)
+  endif
+endfunction
+
+augroup MinimalNetrwExplorer
+  autocmd!
+  autocmd FileType netrw call s:ConfigureNetrwExplorer()
+augroup END
+
+nnoremap <silent> <C-e> :call <SID>ToggleExplorer()<CR>
+
 " --- Autocomplete (current buffer, auto-trigger on 2+ chars) ---
 set completeopt=menuone,noinsert
 set shortmess+=c
@@ -55,16 +152,6 @@ augroup MinimalAutoComplete
   autocmd!
   autocmd TextChangedI * call s:TriggerComplete()
 augroup END
-
-" --- Shared: ensure text property types exist ---
-function! s:EnsurePropTypes()
-  if empty(prop_type_get('cp_sel'))
-    call prop_type_add('cp_sel', #{highlight: 'CPSel'})
-  endif
-  if empty(prop_type_get('cp_item'))
-    call prop_type_add('cp_item', #{highlight: 'CPItem'})
-  endif
-endfunction
 
 " --- Command Palette (Ctrl+P) ---
 let s:palette = [
@@ -259,17 +346,14 @@ function! s:FileFinder()
   call s:EnsurePropTypes()
   let s:ff_query = ''
   let s:ff_sel = 0
-  let l:dir = expand('%:p:h')
-  if empty(l:dir) || !isdirectory(l:dir)
-    let l:dir = getcwd()
-  endif
-  let l:gitroot = systemlist('git -C ' . shellescape(l:dir) . ' rev-parse --show-toplevel 2>/dev/null')
-  if !empty(l:gitroot)
-    let s:ff_base = l:gitroot[0]
+  let s:ff_base = s:ProjectRoot()
+  let l:git = systemlist('git -C ' . shellescape(s:ff_base) . ' rev-parse --show-toplevel 2>/dev/null')
+  if !empty(l:git)
     let s:ff_files = systemlist('git -C ' . shellescape(s:ff_base) . ' ls-files')
   else
-    let s:ff_base = l:dir
-    let s:ff_files = systemlist('find ' . shellescape(s:ff_base) . ' -type f -not -path "*/\.*" | head -5000 | sed "s|^' . s:ff_base . '/||"')
+    let s:ff_files = systemlist('find ' . shellescape(s:ff_base) .
+      \ ' -type f -not -path "*/\.*" | head -5000 | sed "s|^' .
+      \ escape(s:ff_base, '|&') . '/||"')
   endif
   let s:ff_cache = tempname()
   call writefile(s:ff_files, s:ff_cache)
@@ -353,7 +437,7 @@ hi Special      guifg=#94e2d5
 hi Error        guifg=#f38ba8 guibg=#1e1e2e
 hi Todo         guifg=#f9e2af guibg=#1e1e2e gui=bold
 
-" Syntax (filetype overrides)
+" Syntax (filetype)
 hi yamlKey             guifg=#89b4fa
 hi yamlBlockMappingKey guifg=#89b4fa
 hi yamlFlowMappingKey  guifg=#89b4fa
@@ -384,3 +468,10 @@ hi xmlEndTag           guifg=#cba6f7
 hi htmlArg             guifg=#89b4fa
 hi htmlTag             guifg=#cba6f7
 hi htmlEndTag          guifg=#cba6f7
+
+" File explorer (netrw)
+hi netrwDir            guifg=#89b4fa gui=bold
+hi netrwClassify       guifg=#89b4fa
+hi netrwSymLink        guifg=#94e2d5
+hi netrwExe            guifg=#a6e3a1
+hi netrwTreeBar        guifg=#45475a
