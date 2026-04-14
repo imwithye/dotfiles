@@ -33,7 +33,6 @@ inoremap <expr> ) getline('.')[col('.')-1] ==# ')' ? "\<Right>" : ")"
 inoremap <expr> ] getline('.')[col('.')-1] ==# ']' ? "\<Right>" : "]"
 inoremap <expr> } getline('.')[col('.')-1] ==# '}' ? "\<Right>" : "}"
 
-
 let s:completing = 0
 
 function! s:TriggerComplete()
@@ -56,6 +55,16 @@ augroup MinimalAutoComplete
   autocmd!
   autocmd TextChangedI * call s:TriggerComplete()
 augroup END
+
+" --- Shared: ensure text property types exist ---
+function! s:EnsurePropTypes()
+  if empty(prop_type_get('cp_sel'))
+    call prop_type_add('cp_sel', #{highlight: 'CPSel'})
+  endif
+  if empty(prop_type_get('cp_item'))
+    call prop_type_add('cp_item', #{highlight: 'CPItem'})
+  endif
+endfunction
 
 " --- Command Palette (Ctrl+P) ---
 let s:palette = [
@@ -148,12 +157,7 @@ function! s:CPFilter(winid, key)
 endfunction
 
 function! s:CommandPalette()
-  if empty(prop_type_get('cp_sel'))
-    call prop_type_add('cp_sel', #{highlight: 'CPSel'})
-  endif
-  if empty(prop_type_get('cp_item'))
-    call prop_type_add('cp_item', #{highlight: 'CPItem'})
-  endif
+  call s:EnsurePropTypes()
   let s:cp_query = ''
   let s:cp_sel = 0
   let s:cp_filtered = copy(s:palette)
@@ -174,6 +178,119 @@ function! s:CommandPalette()
 endfunction
 
 nnoremap <C-p> :call <SID>CommandPalette()<CR>
+
+" --- File Finder (Ctrl+T, requires fzf) ---
+let s:ff_query = ''
+let s:ff_sel = 0
+let s:ff_filtered = []
+let s:ff_files = []
+let s:ff_base = ''
+let s:ff_cache = ''
+let s:ff_winid = 0
+
+function! s:FFRedraw()
+  let l:w = 60
+  let l:lines = [#{text: ' > ' . s:ff_query . '_', props: []}]
+  let l:idx = 0
+  for l:item in s:ff_filtered[:49]
+    let l:type = l:idx == s:ff_sel ? 'cp_sel' : 'cp_item'
+    let l:text = '   ' . l:item
+    let l:pad = l:w - strwidth(l:text)
+    if l:pad > 0
+      let l:text .= repeat(' ', l:pad)
+    endif
+    call add(l:lines, #{text: l:text,
+      \ props: [#{col: 1, length: len(l:text), type: l:type}]})
+    let l:idx += 1
+  endfor
+  if empty(s:ff_filtered)
+    call add(l:lines, #{text: '   (no match)', props: []})
+  endif
+  call popup_settext(s:ff_winid, l:lines)
+  let l:sel_line = s:ff_sel + 2
+  if l:sel_line > 28
+    call popup_setoptions(s:ff_winid, #{firstline: l:sel_line - 27})
+  else
+    call popup_setoptions(s:ff_winid, #{firstline: 1})
+  endif
+endfunction
+
+function! s:FFFilter(winid, key)
+  if a:key ==# "\<Esc>" || a:key ==# "\<C-t>"
+    call popup_close(a:winid)
+    return 1
+  elseif a:key ==# "\<CR>"
+    call popup_close(a:winid)
+    if s:ff_sel >= 0 && s:ff_sel < len(s:ff_filtered)
+      execute 'edit ' . fnameescape(s:ff_base . '/' . s:ff_filtered[s:ff_sel])
+    endif
+    return 1
+  elseif a:key ==# "\<Up>" || a:key ==# "\<C-k>"
+    let s:ff_sel = max([0, s:ff_sel - 1])
+    call s:FFRedraw()
+    return 1
+  elseif a:key ==# "\<Down>" || a:key ==# "\<C-j>"
+    let s:ff_sel = min([len(s:ff_filtered) - 1, s:ff_sel + 1])
+    call s:FFRedraw()
+    return 1
+  elseif a:key ==# "\<BS>"
+    let s:ff_query = strcharpart(s:ff_query, 0, strchars(s:ff_query) - 1)
+  elseif a:key =~# '^\p$'
+    let s:ff_query .= a:key
+  else
+    return 0
+  endif
+  if empty(s:ff_query)
+    let s:ff_filtered = s:ff_files[:49]
+  else
+    let s:ff_filtered = systemlist('fzf --filter=' . shellescape(s:ff_query) .
+      \ ' < ' . shellescape(s:ff_cache))[:49]
+  endif
+  let s:ff_sel = empty(s:ff_filtered) ? 0 : min([max([0, s:ff_sel]), len(s:ff_filtered) - 1])
+  call s:FFRedraw()
+  return 1
+endfunction
+
+function! s:FileFinder()
+  if !executable('fzf')
+    echoerr 'fzf not found. Install it: brew install fzf'
+    return
+  endif
+  call s:EnsurePropTypes()
+  let s:ff_query = ''
+  let s:ff_sel = 0
+  let l:dir = expand('%:p:h')
+  if empty(l:dir) || !isdirectory(l:dir)
+    let l:dir = getcwd()
+  endif
+  let l:gitroot = systemlist('git -C ' . shellescape(l:dir) . ' rev-parse --show-toplevel 2>/dev/null')
+  if !empty(l:gitroot)
+    let s:ff_base = l:gitroot[0]
+    let s:ff_files = systemlist('git -C ' . shellescape(s:ff_base) . ' ls-files')
+  else
+    let s:ff_base = l:dir
+    let s:ff_files = systemlist('find ' . shellescape(s:ff_base) . ' -type f -not -path "*/\.*" | head -5000 | sed "s|^' . s:ff_base . '/||"')
+  endif
+  let s:ff_cache = tempname()
+  call writefile(s:ff_files, s:ff_cache)
+  let s:ff_filtered = s:ff_files[:49]
+  let s:ff_winid = popup_create([], #{
+    \ title: ' Find File ',
+    \ border: [],
+    \ borderchars: ['─','│','─','│','╭','╮','╯','╰'],
+    \ padding: [0,1,0,1],
+    \ minwidth: 60,
+    \ maxheight: 30,
+    \ pos: 'center',
+    \ filter: function('s:FFFilter'),
+    \ mapping: 0,
+    \ highlight: 'CPNormal',
+    \ borderhighlight: ['CPBorder'],
+    \ })
+  call s:FFRedraw()
+endfunction
+
+nnoremap <C-t> :call <SID>FileFinder()<CR>
 
 " --- Catppuccin Mocha ---
 " Base=#1e1e2e  Surface0=#313244  Surface1=#45475a  Text=#cdd6f4
@@ -208,7 +325,7 @@ hi PmenuSel     guifg=#1e1e2e guibg=#89b4fa gui=bold
 hi PmenuThumb   guibg=#89b4fa
 hi PmenuSbar    guibg=#45475a
 
-" Command palette
+" Command palette / file finder
 hi CPNormal     guifg=#cdd6f4 guibg=#1e1e2e
 hi CPBorder     guifg=#89b4fa guibg=#1e1e2e
 hi CPSel        guifg=#1e1e2e guibg=#89b4fa gui=bold
