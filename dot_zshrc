@@ -24,6 +24,9 @@ export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 # Update KUBECONFIG
 export KUBECONFIG="$KUBECONFIG:$HOME/.kube/config:$HOME/.kube/homelab"
 
+# K9s
+export K9S_CONFIG_DIR="$HOME/.config/k9s"
+
 # PNPM
 export PNPM_HOME=$HOME/.pnpm
 export PATH=$PATH:$PNPM_HOME
