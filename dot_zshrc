@@ -22,7 +22,10 @@ test -d /opt/homebrew/opt/ruby/bin && export PATH="/opt/homebrew/opt/ruby/bin:$P
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
 # Update KUBECONFIG
-export KUBECONFIG="$KUBECONFIG:$HOME/.kube/config:$HOME/.kube/homelab"
+export KUBECONFIG="$HOME/.kube/config"
+for f in "$HOME"/.kube/kubeconfig.d/*.yaml(N); do
+  KUBECONFIG="$KUBECONFIG:$f"
+done
 
 # K9s
 export K9S_CONFIG_DIR="$HOME/.config/k9s"
