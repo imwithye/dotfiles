@@ -4,19 +4,23 @@
 syntax on
 filetype plugin indent on
 set number
-set mouse=a
+set mouse=a ttymouse=sgr
 set tabstop=4 shiftwidth=4 expandtab
 set autoindent smartindent
 set encoding=utf-8
 set backspace=indent,eol,start
 set noswapfile nobackup
+set ttimeoutlen=10
 set termguicolors
+set laststatus=2
+set statusline=%#StatusMode#\ %{toupper(mode())}\ %#StatusLine#\ %f\ %m%r%=%y\ %l:%c\ %p%%
 
-" --- Autocomplete (current buffer only, auto-trigger) ---
+" --- Autocomplete (current buffer, auto-trigger on 2+ chars or dot) ---
 set completeopt=menuone,noinsert
 set shortmess+=c
 set complete=.
 set wildmenu wildmode=longest:full,full
+
 inoremap <expr> <CR> pumvisible() ? "\<C-y>" : "\<CR>"
 
 function! s:TriggerComplete()
@@ -36,19 +40,126 @@ endfunction
 
 autocmd TextChangedI * call s:TriggerComplete()
 
-" --- Status Bar ---
-set laststatus=2
-set statusline=%#StatusMode#\ %{toupper(mode())}\ %#StatusLine#\ %f\ %m%r%=%y\ %l:%c\ %p%%
+" --- Command Palette (Ctrl+P) ---
+let s:palette = [
+  \ ['File: Save',                 'write'],
+  \ ['File: Save All',             'wall'],
+  \ ['File: Open Explorer',        'Explore'],
+  \ ['File: New File',             'enew'],
+  \ ['File: Reload',               'edit!'],
+  \ ['Split: Horizontal',          'split'],
+  \ ['Split: Vertical',            'vsplit'],
+  \ ['Split: Close',               'close'],
+  \ ['Split: Only (close others)', 'only'],
+  \ ['Edit: Undo',                 'undo'],
+  \ ['Edit: Redo',                 'redo'],
+  \ ['Edit: Select All',           'normal! ggVG'],
+  \ ['Search: Find in File',       'call feedkeys("/")'],
+  \ ['Search: Replace',            'call feedkeys(":%s///gc\<Left>\<Left>\<Left>\<Left>")'],
+  \ ['View: Toggle Line Numbers',  'set number! | set number?'],
+  \ ['View: Toggle Wrap',          'set wrap! | set wrap?'],
+  \ ['View: Toggle Paste Mode',    'set paste! | set paste?'],
+  \ ['Quit',                       'quit'],
+  \ ['Quit: Force',                'quit!'],
+  \ ['Quit: Save & Quit',          'wq'],
+  \ ['Quit: All',                  'quitall'],
+  \ ['Quit: Force All',            'quitall!'],
+  \ ]
+
+let s:cp_query = ''
+let s:cp_sel = 0
+let s:cp_filtered = []
+let s:cp_winid = 0
+
+function! s:CPRedraw()
+  let l:lines = [#{text: ' > ' . s:cp_query . '_', props: []}]
+  let l:idx = 0
+  for l:item in s:cp_filtered
+    let l:type = l:idx == s:cp_sel ? 'cp_sel' : 'cp_item'
+    call add(l:lines, #{text: '   ' . l:item[0],
+      \ props: [#{col: 1, length: len(l:item[0]) + 3, type: l:type}]})
+    let l:idx += 1
+  endfor
+  if empty(s:cp_filtered)
+    call add(l:lines, #{text: '   (no match)', props: []})
+  endif
+  call popup_settext(s:cp_winid, l:lines)
+  let l:sel_line = s:cp_sel + 2
+  if l:sel_line > 23
+    call popup_setoptions(s:cp_winid, #{firstline: l:sel_line - 22})
+  else
+    call popup_setoptions(s:cp_winid, #{firstline: 1})
+  endif
+endfunction
+
+function! s:CPFilter(winid, key)
+  if a:key ==# "\<Esc>" || a:key ==# "\<C-p>"
+    call popup_close(a:winid)
+    return 1
+  elseif a:key ==# "\<CR>"
+    call popup_close(a:winid)
+    if s:cp_sel >= 0 && s:cp_sel < len(s:cp_filtered)
+      execute s:cp_filtered[s:cp_sel][1]
+    endif
+    return 1
+  elseif a:key ==# "\<Up>" || a:key ==# "\<C-k>"
+    let s:cp_sel = max([0, s:cp_sel - 1])
+    call s:CPRedraw()
+    return 1
+  elseif a:key ==# "\<Down>" || a:key ==# "\<C-j>"
+    let s:cp_sel = min([len(s:cp_filtered) - 1, s:cp_sel + 1])
+    call s:CPRedraw()
+    return 1
+  elseif a:key ==# "\<BS>"
+    let s:cp_query = s:cp_query[:-2]
+  elseif a:key =~# '^\p$'
+    let s:cp_query .= a:key
+  else
+    return 0
+  endif
+  let l:pattern = '\c' . escape(s:cp_query, '~\.*[]^$')
+  let s:cp_filtered = filter(copy(s:palette), 'v:val[0] =~# l:pattern')
+  let s:cp_sel = min([s:cp_sel, max([0, len(s:cp_filtered) - 1])])
+  call s:CPRedraw()
+  return 1
+endfunction
+
+function! s:CommandPalette()
+  if empty(prop_type_get('cp_sel'))
+    call prop_type_add('cp_sel', #{highlight: 'CPSel'})
+  endif
+  if empty(prop_type_get('cp_item'))
+    call prop_type_add('cp_item', #{highlight: 'CPItem'})
+  endif
+  let s:cp_query = ''
+  let s:cp_sel = 0
+  let s:cp_filtered = copy(s:palette)
+  let s:cp_winid = popup_create([], #{
+    \ title: ' Command Palette ',
+    \ border: [],
+    \ borderchars: ['─','│','─','│','╭','╮','╯','╰'],
+    \ padding: [0,1,0,1],
+    \ minwidth: 45,
+    \ maxheight: 25,
+    \ pos: 'center',
+    \ filter: function('s:CPFilter'),
+    \ mapping: 0,
+    \ highlight: 'CPNormal',
+    \ borderhighlight: ['CPBorder'],
+    \ })
+  call s:CPRedraw()
+endfunction
+
+nnoremap <C-p> :call <SID>CommandPalette()<CR>
 
 " --- Catppuccin Mocha ---
-" Base=#1e1e2e  Surface0=#313244  Surface1=#45475a
-" Text=#cdd6f4  Subtext0=#a6adc8  Overlay0=#6c7086
-" Blue=#89b4fa  Mauve=#cba6f7  Green=#a6e3a1  Peach=#fab387
-" Red=#f38ba8  Yellow=#f9e2af  Teal=#94e2d5  Lavender=#b4befe
+" Base=#1e1e2e  Surface0=#313244  Surface1=#45475a  Text=#cdd6f4
+" Subtext0=#a6adc8  Overlay0=#6c7086  Blue=#89b4fa  Mauve=#cba6f7
+" Green=#a6e3a1  Peach=#fab387  Red=#f38ba8  Yellow=#f9e2af
+" Teal=#94e2d5  Lavender=#b4befe
 set background=dark
 
-" UI
-hi Normal       guifg=#cdd6f4 guibg=#1e1e2e
+hi Normal       guifg=#cdd6f4 guibg=NONE
 hi LineNr       guifg=#45475a
 hi CursorLine   guibg=#313244
 hi CursorLineNr guifg=#cba6f7 guibg=#1e1e2e
@@ -59,30 +170,20 @@ hi SpecialKey   guifg=#45475a
 hi VertSplit    guifg=#45475a guibg=#1e1e2e
 hi Directory    guifg=#89b4fa
 hi Title        guifg=#cba6f7 gui=bold
-
-" Search
 hi Search       guifg=#1e1e2e guibg=#f9e2af
 hi IncSearch    guifg=#1e1e2e guibg=#fab387
-
-" Status bar
 hi StatusLine   guifg=#1e1e2e guibg=#89b4fa gui=bold
 hi StatusLineNC guifg=#a6adc8 guibg=#313244 gui=NONE
 hi StatusMode   guifg=#1e1e2e guibg=#cba6f7 gui=bold
-
-" Popup menu
 hi Pmenu        guifg=#cdd6f4 guibg=#313244
 hi PmenuSel     guifg=#1e1e2e guibg=#89b4fa gui=bold
-
-" Messages
+hi PmenuThumb   guibg=#89b4fa
+hi PmenuSbar    guibg=#45475a
 hi WarningMsg   guifg=#fab387
 hi ErrorMsg     guifg=#f38ba8 guibg=#1e1e2e
-
-" Diff
 hi DiffAdd      guifg=#a6e3a1 guibg=#1e1e2e
 hi DiffChange   guifg=#f9e2af guibg=#1e1e2e
 hi DiffDelete   guifg=#f38ba8 guibg=#1e1e2e
-
-" Syntax
 hi Comment      guifg=#6c7086 gui=italic
 hi Constant     guifg=#fab387
 hi String       guifg=#a6e3a1
@@ -94,3 +195,7 @@ hi Type         guifg=#f9e2af
 hi Special      guifg=#94e2d5
 hi Error        guifg=#f38ba8 guibg=#1e1e2e
 hi Todo         guifg=#f9e2af guibg=#1e1e2e gui=bold
+hi CPNormal     guifg=#cdd6f4 guibg=#1e1e2e
+hi CPBorder     guifg=#89b4fa guibg=#1e1e2e
+hi CPSel        guifg=#1e1e2e guibg=#89b4fa gui=bold
+hi CPItem       guifg=#a6adc8 guibg=#1e1e2e
