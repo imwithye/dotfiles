@@ -4,7 +4,8 @@
 syntax on
 filetype plugin indent on
 set number
-set mouse=a ttymouse=sgr
+set mouse=a
+if exists('&ttymouse') | set ttymouse=sgr | endif
 set tabstop=4 shiftwidth=4 expandtab
 set autoindent smartindent
 set encoding=utf-8
@@ -15,30 +16,46 @@ set termguicolors
 set laststatus=2
 set statusline=%#StatusMode#\ %{toupper(mode())}\ %#StatusLine#\ %f\ %m%r%=%y\ %l:%c\ %p%%
 
-" --- Autocomplete (current buffer, auto-trigger on 2+ chars or dot) ---
+" --- Autocomplete (current buffer, auto-trigger on 2+ chars) ---
 set completeopt=menuone,noinsert
 set shortmess+=c
 set complete=.
 set wildmenu wildmode=longest:full,full
 
-inoremap <expr> <CR> pumvisible() ? "\<C-y>" : "\<CR>"
+inoremap <expr> <CR> pumvisible() ? (complete_info(['selected']).selected >= 0 ? "\<C-y>" : "\<C-e>\<CR>") : "\<CR>"
+inoremap ( ()<Left>
+inoremap [ []<Left>
+inoremap { {}<Left>
+inoremap " ""<Left>
+inoremap ' ''<Left>
+inoremap ` ``<Left>
+inoremap <expr> ) getline('.')[col('.')-1] ==# ')' ? "\<Right>" : ")"
+inoremap <expr> ] getline('.')[col('.')-1] ==# ']' ? "\<Right>" : "]"
+inoremap <expr> } getline('.')[col('.')-1] ==# '}' ? "\<Right>" : "}"
+
+
+let s:completing = 0
 
 function! s:TriggerComplete()
-  if pumvisible()
+  if pumvisible() || s:completing
     return
   endif
   let l:col = col('.') - 1
   if l:col < 1
     return
   endif
-  let l:char = getline('.')[l:col - 1]
   let l:word = matchstr(getline('.')[:l:col - 1], '\w\+$')
-  if l:char ==# '.' || len(l:word) >= 2
+  if len(l:word) >= 2
+    let s:completing = 1
     call feedkeys("\<C-n>", 'n')
+    call timer_start(100, {-> execute('let s:completing = 0')})
   endif
 endfunction
 
-autocmd TextChangedI * call s:TriggerComplete()
+augroup MinimalAutoComplete
+  autocmd!
+  autocmd TextChangedI * call s:TriggerComplete()
+augroup END
 
 " --- Command Palette (Ctrl+P) ---
 let s:palette = [
@@ -72,12 +89,18 @@ let s:cp_filtered = []
 let s:cp_winid = 0
 
 function! s:CPRedraw()
+  let l:w = 45
   let l:lines = [#{text: ' > ' . s:cp_query . '_', props: []}]
   let l:idx = 0
   for l:item in s:cp_filtered
     let l:type = l:idx == s:cp_sel ? 'cp_sel' : 'cp_item'
-    call add(l:lines, #{text: '   ' . l:item[0],
-      \ props: [#{col: 1, length: len(l:item[0]) + 3, type: l:type}]})
+    let l:text = '   ' . l:item[0]
+    let l:pad = l:w - strwidth(l:text)
+    if l:pad > 0
+      let l:text .= repeat(' ', l:pad)
+    endif
+    call add(l:lines, #{text: l:text,
+      \ props: [#{col: 1, length: len(l:text), type: l:type}]})
     let l:idx += 1
   endfor
   if empty(s:cp_filtered)
@@ -111,7 +134,7 @@ function! s:CPFilter(winid, key)
     call s:CPRedraw()
     return 1
   elseif a:key ==# "\<BS>"
-    let s:cp_query = s:cp_query[:-2]
+    let s:cp_query = strcharpart(s:cp_query, 0, strchars(s:cp_query) - 1)
   elseif a:key =~# '^\p$'
     let s:cp_query .= a:key
   else
@@ -119,7 +142,7 @@ function! s:CPFilter(winid, key)
   endif
   let l:pattern = '\c' . escape(s:cp_query, '~\.*[]^$')
   let s:cp_filtered = filter(copy(s:palette), 'v:val[0] =~# l:pattern')
-  let s:cp_sel = min([s:cp_sel, max([0, len(s:cp_filtered) - 1])])
+  let s:cp_sel = empty(s:cp_filtered) ? 0 : min([max([0, s:cp_sel]), len(s:cp_filtered) - 1])
   call s:CPRedraw()
   return 1
 endfunction
@@ -159,6 +182,7 @@ nnoremap <C-p> :call <SID>CommandPalette()<CR>
 " Teal=#94e2d5  Lavender=#b4befe
 set background=dark
 
+" UI
 hi Normal       guifg=#cdd6f4 guibg=NONE
 hi LineNr       guifg=#45475a
 hi CursorLine   guibg=#313244
@@ -172,18 +196,34 @@ hi Directory    guifg=#89b4fa
 hi Title        guifg=#cba6f7 gui=bold
 hi Search       guifg=#1e1e2e guibg=#f9e2af
 hi IncSearch    guifg=#1e1e2e guibg=#fab387
+
+" Status bar
 hi StatusLine   guifg=#1e1e2e guibg=#89b4fa gui=bold
 hi StatusLineNC guifg=#a6adc8 guibg=#313244 gui=NONE
 hi StatusMode   guifg=#1e1e2e guibg=#cba6f7 gui=bold
+
+" Popup / autocomplete
 hi Pmenu        guifg=#cdd6f4 guibg=#313244
 hi PmenuSel     guifg=#1e1e2e guibg=#89b4fa gui=bold
 hi PmenuThumb   guibg=#89b4fa
 hi PmenuSbar    guibg=#45475a
+
+" Command palette
+hi CPNormal     guifg=#cdd6f4 guibg=#1e1e2e
+hi CPBorder     guifg=#89b4fa guibg=#1e1e2e
+hi CPSel        guifg=#1e1e2e guibg=#89b4fa gui=bold
+hi CPItem       guifg=#a6adc8 guibg=#1e1e2e
+
+" Messages
 hi WarningMsg   guifg=#fab387
 hi ErrorMsg     guifg=#f38ba8 guibg=#1e1e2e
+
+" Diff
 hi DiffAdd      guifg=#a6e3a1 guibg=#1e1e2e
 hi DiffChange   guifg=#f9e2af guibg=#1e1e2e
 hi DiffDelete   guifg=#f38ba8 guibg=#1e1e2e
+
+" Syntax (general)
 hi Comment      guifg=#6c7086 gui=italic
 hi Constant     guifg=#fab387
 hi String       guifg=#a6e3a1
@@ -195,7 +235,35 @@ hi Type         guifg=#f9e2af
 hi Special      guifg=#94e2d5
 hi Error        guifg=#f38ba8 guibg=#1e1e2e
 hi Todo         guifg=#f9e2af guibg=#1e1e2e gui=bold
-hi CPNormal     guifg=#cdd6f4 guibg=#1e1e2e
-hi CPBorder     guifg=#89b4fa guibg=#1e1e2e
-hi CPSel        guifg=#1e1e2e guibg=#89b4fa gui=bold
-hi CPItem       guifg=#a6adc8 guibg=#1e1e2e
+
+" Syntax (filetype overrides)
+hi yamlKey             guifg=#89b4fa
+hi yamlBlockMappingKey guifg=#89b4fa
+hi yamlFlowMappingKey  guifg=#89b4fa
+hi jsonKeyword         guifg=#89b4fa
+hi jsonString          guifg=#a6e3a1
+hi jsonNumber          guifg=#fab387
+hi jsonBoolean         guifg=#fab387
+hi jsonNull            guifg=#f38ba8
+hi tomlKey             guifg=#89b4fa
+hi tomlTable           guifg=#cba6f7 gui=bold
+hi tomlString          guifg=#a6e3a1
+hi tomlInteger         guifg=#fab387
+hi tomlBoolean         guifg=#fab387
+hi dosiniLabel         guifg=#89b4fa
+hi dosiniHeader        guifg=#cba6f7 gui=bold
+hi dosiniValue         guifg=#cdd6f4
+hi shVariable          guifg=#89b4fa
+hi shSetList           guifg=#89b4fa
+hi shShellVariables    guifg=#89b4fa
+hi shDeref             guifg=#f38ba8
+hi dockerfileKeyword   guifg=#cba6f7 gui=bold
+hi dockerfileFrom      guifg=#89b4fa
+hi makeTarget          guifg=#89b4fa gui=bold
+hi makeCommands        guifg=#cdd6f4
+hi xmlAttrib           guifg=#89b4fa
+hi xmlTag              guifg=#cba6f7
+hi xmlEndTag           guifg=#cba6f7
+hi htmlArg             guifg=#89b4fa
+hi htmlTag             guifg=#cba6f7
+hi htmlEndTag          guifg=#cba6f7
