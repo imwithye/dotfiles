@@ -14,6 +14,7 @@ set noswapfile nobackup
 set clipboard=unnamed
 set ttimeoutlen=10
 set termguicolors
+set fillchars=eob:\ ,vert:\ ,fold:·
 set laststatus=2
 set statusline=%#StatusMode#\ %{toupper(mode())}\ %#StatusLine#\ %f\ %m%r%=%y\ %l:%c\ %p%%
 
@@ -393,7 +394,10 @@ hi Visual       guibg=#45475a
 hi MatchParen   guifg=#1e1e2e guibg=#b4befe
 hi NonText      guifg=#45475a
 hi SpecialKey   guifg=#45475a
-hi VertSplit    guifg=#45475a guibg=#1e1e2e
+hi VertSplit    guifg=#1e1e2e guibg=NONE
+hi WinSeparator guifg=#1e1e2e guibg=NONE
+hi SignColumn   guibg=NONE
+hi EndOfBuffer  guifg=bg      guibg=NONE
 hi Directory    guifg=#89b4fa
 hi Title        guifg=#cba6f7 gui=bold
 hi Search       guifg=#1e1e2e guibg=#f9e2af
