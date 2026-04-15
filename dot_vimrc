@@ -157,11 +157,6 @@ augroup END
 
 " --- Command Palette (Ctrl+P) ---
 let s:palette = [
-  \ ['File: Save',                 'write'],
-  \ ['File: Save All',             'wall'],
-  \ ['File: Open Explorer',        'Explore'],
-  \ ['File: New File',             'enew'],
-  \ ['File: Reload',               'edit!'],
   \ ['Split: Horizontal',          'split'],
   \ ['Split: Vertical',            'vsplit'],
   \ ['Split: Close',               'close'],
@@ -224,11 +219,11 @@ function! s:CPFilter(winid, key)
     endif
     return 1
   elseif a:key ==# "\<Up>" || a:key ==# "\<C-k>"
-    let s:cp_sel = max([0, s:cp_sel - 1])
+    let s:cp_sel = s:cp_sel > 0 ? s:cp_sel - 1 : len(s:cp_filtered) - 1
     call s:CPRedraw()
     return 1
   elseif a:key ==# "\<Down>" || a:key ==# "\<C-j>"
-    let s:cp_sel = min([len(s:cp_filtered) - 1, s:cp_sel + 1])
+    let s:cp_sel = s:cp_sel < len(s:cp_filtered) - 1 ? s:cp_sel + 1 : 0
     call s:CPRedraw()
     return 1
   elseif a:key ==# "\<BS>"
