@@ -378,105 +378,106 @@ endfunction
 
 nnoremap <C-t> :call <SID>FileFinder()<CR>
 
-" --- Catppuccin Mocha ---
-" Base=#1e1e2e  Surface0=#313244  Surface1=#45475a  Text=#cdd6f4
-" Subtext0=#a6adc8  Overlay0=#6c7086  Blue=#89b4fa  Mauve=#cba6f7
-" Green=#a6e3a1  Peach=#fab387  Red=#f38ba8  Yellow=#f9e2af
-" Teal=#94e2d5  Lavender=#b4befe
+" --- Desert Dusk ---
+" Warm earthy palette that complements tmux Catppuccin Mocha
+" Base=#292521  Surf0=#3b3531  Surf1=#4e4641  Text=#e0cdb0
+" Sub=#a89a82  Over=#6e6358  Gold=#e2b94a  Orange=#d49255
+" Green=#87b065  Red=#c26060  Blue=#6fa8c7  Mauve=#a88bc7
+" Teal=#6aab96  Khaki=#d4c078  Cream=#f0dca0
 set background=dark
 
 " UI
-hi Normal       guifg=#cdd6f4 guibg=NONE
-hi LineNr       guifg=#45475a
-hi CursorLine   guibg=#313244
-hi CursorLineNr guifg=#cba6f7 guibg=#1e1e2e
-hi Visual       guibg=#45475a
-hi MatchParen   guifg=#1e1e2e guibg=#b4befe
-hi NonText      guifg=#45475a
-hi SpecialKey   guifg=#45475a
-hi VertSplit    guifg=#1e1e2e guibg=NONE
-hi WinSeparator guifg=#1e1e2e guibg=NONE
+hi Normal       guifg=#e0cdb0 guibg=NONE
+hi LineNr       guifg=#4e4641
+hi CursorLine   guibg=#3b3531
+hi CursorLineNr guifg=#e2b94a guibg=#292521
+hi Visual       guibg=#4e4641
+hi MatchParen   guifg=#292521 guibg=#e2b94a
+hi NonText      guifg=#4e4641
+hi SpecialKey   guifg=#4e4641
+hi VertSplit    guifg=#3b3531 guibg=NONE
+hi WinSeparator guifg=#3b3531 guibg=NONE
 hi SignColumn   guibg=NONE
 hi EndOfBuffer  guifg=bg      guibg=NONE
-hi Directory    guifg=#89b4fa
-hi Title        guifg=#cba6f7 gui=bold
-hi Search       guifg=#1e1e2e guibg=#f9e2af
-hi IncSearch    guifg=#1e1e2e guibg=#fab387
+hi Directory    guifg=#6fa8c7
+hi Title        guifg=#e2b94a gui=bold
+hi Search       guifg=#292521 guibg=#e2b94a
+hi IncSearch    guifg=#292521 guibg=#d49255
 
 " Status bar
-hi StatusLine   guifg=#1e1e2e guibg=#89b4fa gui=bold
-hi StatusLineNC guifg=#a6adc8 guibg=#313244 gui=NONE
-hi StatusMode   guifg=#1e1e2e guibg=#cba6f7 gui=bold
+hi StatusLine   guifg=#292521 guibg=#d49255 gui=bold
+hi StatusLineNC guifg=#a89a82 guibg=#3b3531 gui=NONE
+hi StatusMode   guifg=#292521 guibg=#e2b94a gui=bold
 
 " Popup / autocomplete
-hi Pmenu        guifg=#cdd6f4 guibg=#313244
-hi PmenuSel     guifg=#1e1e2e guibg=#89b4fa gui=bold
-hi PmenuThumb   guibg=#89b4fa
-hi PmenuSbar    guibg=#45475a
+hi Pmenu        guifg=#e0cdb0 guibg=#3b3531
+hi PmenuSel     guifg=#292521 guibg=#d49255 gui=bold
+hi PmenuThumb   guibg=#d49255
+hi PmenuSbar    guibg=#4e4641
 
 " Command palette / file finder
-hi CPNormal     guifg=#cdd6f4 guibg=#1e1e2e
-hi CPBorder     guifg=#89b4fa guibg=#1e1e2e
-hi CPSel        guifg=#1e1e2e guibg=#89b4fa gui=bold
-hi CPItem       guifg=#a6adc8 guibg=#1e1e2e
+hi CPNormal     guifg=#e0cdb0 guibg=#292521
+hi CPBorder     guifg=#d49255 guibg=#292521
+hi CPSel        guifg=#292521 guibg=#d49255 gui=bold
+hi CPItem       guifg=#a89a82 guibg=#292521
 
 " Messages
-hi WarningMsg   guifg=#fab387
-hi ErrorMsg     guifg=#f38ba8 guibg=#1e1e2e
+hi WarningMsg   guifg=#d49255
+hi ErrorMsg     guifg=#c26060 guibg=#292521
 
 " Diff
-hi DiffAdd      guifg=#a6e3a1 guibg=#1e1e2e
-hi DiffChange   guifg=#f9e2af guibg=#1e1e2e
-hi DiffDelete   guifg=#f38ba8 guibg=#1e1e2e
+hi DiffAdd      guifg=#87b065 guibg=#292521
+hi DiffChange   guifg=#e2b94a guibg=#292521
+hi DiffDelete   guifg=#c26060 guibg=#292521
 
 " Syntax (general)
-hi Comment      guifg=#6c7086 gui=italic
-hi Constant     guifg=#fab387
-hi String       guifg=#a6e3a1
-hi Identifier   guifg=#cdd6f4
-hi Function     guifg=#89b4fa
-hi Statement    guifg=#cba6f7
-hi PreProc      guifg=#f38ba8
-hi Type         guifg=#f9e2af
-hi Special      guifg=#94e2d5
-hi Error        guifg=#f38ba8 guibg=#1e1e2e
-hi Todo         guifg=#f9e2af guibg=#1e1e2e gui=bold
+hi Comment      guifg=#6e6358 gui=italic
+hi Constant     guifg=#d49255
+hi String       guifg=#87b065
+hi Identifier   guifg=#e0cdb0
+hi Function     guifg=#6fa8c7
+hi Statement    guifg=#a88bc7
+hi PreProc      guifg=#c26060
+hi Type         guifg=#e2b94a
+hi Special      guifg=#6aab96
+hi Error        guifg=#c26060 guibg=#292521
+hi Todo         guifg=#e2b94a guibg=#292521 gui=bold
 
 " Syntax (filetype)
-hi yamlKey             guifg=#89b4fa
-hi yamlBlockMappingKey guifg=#89b4fa
-hi yamlFlowMappingKey  guifg=#89b4fa
-hi jsonKeyword         guifg=#89b4fa
-hi jsonString          guifg=#a6e3a1
-hi jsonNumber          guifg=#fab387
-hi jsonBoolean         guifg=#fab387
-hi jsonNull            guifg=#f38ba8
-hi tomlKey             guifg=#89b4fa
-hi tomlTable           guifg=#cba6f7 gui=bold
-hi tomlString          guifg=#a6e3a1
-hi tomlInteger         guifg=#fab387
-hi tomlBoolean         guifg=#fab387
-hi dosiniLabel         guifg=#89b4fa
-hi dosiniHeader        guifg=#cba6f7 gui=bold
-hi dosiniValue         guifg=#cdd6f4
-hi shVariable          guifg=#89b4fa
-hi shSetList           guifg=#89b4fa
-hi shShellVariables    guifg=#89b4fa
-hi shDeref             guifg=#f38ba8
-hi dockerfileKeyword   guifg=#cba6f7 gui=bold
-hi dockerfileFrom      guifg=#89b4fa
-hi makeTarget          guifg=#89b4fa gui=bold
-hi makeCommands        guifg=#cdd6f4
-hi xmlAttrib           guifg=#89b4fa
-hi xmlTag              guifg=#cba6f7
-hi xmlEndTag           guifg=#cba6f7
-hi htmlArg             guifg=#89b4fa
-hi htmlTag             guifg=#cba6f7
-hi htmlEndTag          guifg=#cba6f7
+hi yamlKey             guifg=#6fa8c7
+hi yamlBlockMappingKey guifg=#6fa8c7
+hi yamlFlowMappingKey  guifg=#6fa8c7
+hi jsonKeyword         guifg=#6fa8c7
+hi jsonString          guifg=#87b065
+hi jsonNumber          guifg=#d49255
+hi jsonBoolean         guifg=#d49255
+hi jsonNull            guifg=#c26060
+hi tomlKey             guifg=#6fa8c7
+hi tomlTable           guifg=#a88bc7 gui=bold
+hi tomlString          guifg=#87b065
+hi tomlInteger         guifg=#d49255
+hi tomlBoolean         guifg=#d49255
+hi dosiniLabel         guifg=#6fa8c7
+hi dosiniHeader        guifg=#a88bc7 gui=bold
+hi dosiniValue         guifg=#e0cdb0
+hi shVariable          guifg=#6fa8c7
+hi shSetList           guifg=#6fa8c7
+hi shShellVariables    guifg=#6fa8c7
+hi shDeref             guifg=#c26060
+hi dockerfileKeyword   guifg=#a88bc7 gui=bold
+hi dockerfileFrom      guifg=#6fa8c7
+hi makeTarget          guifg=#6fa8c7 gui=bold
+hi makeCommands        guifg=#e0cdb0
+hi xmlAttrib           guifg=#6fa8c7
+hi xmlTag              guifg=#a88bc7
+hi xmlEndTag           guifg=#a88bc7
+hi htmlArg             guifg=#6fa8c7
+hi htmlTag             guifg=#a88bc7
+hi htmlEndTag          guifg=#a88bc7
 
 " File explorer (netrw)
-hi netrwDir            guifg=#89b4fa gui=bold
-hi netrwClassify       guifg=#89b4fa
-hi netrwSymLink        guifg=#94e2d5
-hi netrwExe            guifg=#a6e3a1
-hi netrwTreeBar        guifg=#45475a
+hi netrwDir            guifg=#6fa8c7 gui=bold
+hi netrwClassify       guifg=#6fa8c7
+hi netrwSymLink        guifg=#6aab96
+hi netrwExe            guifg=#87b065
+hi netrwTreeBar        guifg=#4e4641
