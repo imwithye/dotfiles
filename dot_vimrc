@@ -157,21 +157,24 @@ augroup END
 
 " --- Command Palette (Ctrl+P) ---
 let s:palette = [
-  \ ['Split: Horizontal',          'split'],
+  \ ['Terminal: Toggle',           'call <SID>ToggleTerminal()'],
+  \ ['Terminal: New Horizontal',   'botright terminal'],
+  \ ['Terminal: New Vertical',     'vertical botright terminal'],
   \ ['Split: Vertical',            'vsplit'],
+  \ ['Split: Horizontal',          'split'],
   \ ['Split: Close',               'close'],
   \ ['Split: Only (close others)', 'only'],
+  \ ['Search: Find in File',       'call feedkeys("/")'],
+  \ ['Search: Replace',            'call feedkeys(":%s///gc\<Left>\<Left>\<Left>\<Left>")'],
   \ ['Edit: Undo',                 'undo'],
   \ ['Edit: Redo',                 'redo'],
   \ ['Edit: Select All',           'normal! ggVG'],
-  \ ['Search: Find in File',       'call feedkeys("/")'],
-  \ ['Search: Replace',            'call feedkeys(":%s///gc\<Left>\<Left>\<Left>\<Left>")'],
   \ ['View: Toggle Line Numbers',  'set number! | set number?'],
   \ ['View: Toggle Wrap',          'set wrap! | set wrap?'],
   \ ['View: Toggle Paste Mode',    'set paste! | set paste?'],
+  \ ['Quit: Save & Quit',          'wq'],
   \ ['Quit',                       'quit'],
   \ ['Quit: Force',                'quit!'],
-  \ ['Quit: Save & Quit',          'wq'],
   \ ['Quit: All',                  'quitall'],
   \ ['Quit: Force All',            'quitall!'],
   \ ]
@@ -373,6 +376,43 @@ endfunction
 
 nnoremap <C-t> :call <SID>FileFinder()<CR>
 
+" --- Terminal Toggle (Ctrl+`) ---
+let s:term_bufnr = -1
+
+function! s:TermWinId()
+  if s:term_bufnr < 0 || !bufexists(s:term_bufnr)
+    return 0
+  endif
+  for l:info in getwininfo()
+    if l:info.bufnr == s:term_bufnr
+      return l:info.winid
+    endif
+  endfor
+  return 0
+endfunction
+
+function! s:ToggleTerminal()
+  let l:winid = s:TermWinId()
+  if l:winid > 0
+    call win_gotoid(l:winid)
+    hide
+    return
+  endif
+  if s:term_bufnr >= 0 && bufexists(s:term_bufnr)
+    botright 15split
+    execute 'buffer ' . s:term_bufnr
+  else
+    botright terminal
+    resize 15
+    let s:term_bufnr = bufnr('%')
+  endif
+  setlocal nobuflisted
+  startinsert
+endfunction
+
+nnoremap <silent> <C-`> :call <SID>ToggleTerminal()<CR>
+tnoremap <silent> <C-`> <C-\><C-n>:call <SID>ToggleTerminal()<CR>
+
 " --- Desert Dusk ---
 " Warm earthy palette that complements tmux Catppuccin Mocha
 " Base=#292521  Surf0=#3b3531  Surf1=#4e4641  Text=#e0cdb0
@@ -382,7 +422,7 @@ nnoremap <C-t> :call <SID>FileFinder()<CR>
 set background=dark
 
 " UI
-hi Normal       guifg=#e0cdb0 guibg=NONE
+hi Normal       guifg=#e0cdb0 guibg=#292521
 hi LineNr       guifg=#4e4641
 hi CursorLine   guibg=#3b3531
 hi CursorLineNr guifg=#e2b94a guibg=#292521
@@ -469,6 +509,17 @@ hi xmlEndTag           guifg=#a88bc7
 hi htmlArg             guifg=#6fa8c7
 hi htmlTag             guifg=#a88bc7
 hi htmlEndTag          guifg=#a88bc7
+
+" Terminal
+hi Terminal            guifg=#e0cdb0 guibg=#292521
+hi StatusLineTerm      guifg=#292521 guibg=#87b065 gui=bold
+hi StatusLineTermNC    guifg=#a89a82 guibg=#3b3531 gui=NONE
+let g:terminal_ansi_colors = [
+  \ '#292521', '#c26060', '#87b065', '#e2b94a',
+  \ '#6fa8c7', '#a88bc7', '#6aab96', '#a89a82',
+  \ '#6e6358', '#d48080', '#a0c880', '#f0dca0',
+  \ '#8fc0df', '#c0a8df', '#8ac8b0', '#e0cdb0',
+  \ ]
 
 " File explorer (netrw)
 hi netrwDir            guifg=#6fa8c7 gui=bold
