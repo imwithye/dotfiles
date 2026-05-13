@@ -111,6 +111,10 @@ if checkinstall lazydocker; then
   alias lzd=lazydocker
 fi
 
+if checkinstall atuin; then
+  eval "$(atuin init zsh)"
+fi
+
 # User configuration
 if [ -f $HOME/.zshrc.local ]; then
   source $HOME/.zshrc.local
