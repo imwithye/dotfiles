@@ -18,6 +18,9 @@ test -d /opt/homebrew/opt/rustup/bin && export PATH="/opt/homebrew/opt/rustup/bi
 # Ruby
 test -d /opt/homebrew/opt/ruby/bin && export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
 
+# libpq
+test -d /opt/homebrew/opt/libpq/bin && export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
+
 # Update Path
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
