@@ -33,6 +33,9 @@ done
 # K9s
 export K9S_CONFIG_DIR="$HOME/.config/k9s"
 
+# ArgoCD
+export ARGOCD_OPTS='--grpc-web'
+
 # PNPM
 export PNPM_HOME=$HOME/.pnpm
 export PATH=$PATH:$PNPM_HOME
@@ -53,7 +56,6 @@ checkinstall() {
 # 1Password Environment Variables
 if checkinstall op; then
   loadenv() {
-    export OPENAI_API_KEY=$(op item get "OpenAI" --vault Private --fields PAT --reveal)
     export GITHUB_TOKEN=$(op item get "GitHub" --vault Private --fields PAT --reveal)
   }
   alias loadenv='loadenv'
