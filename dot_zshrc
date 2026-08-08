@@ -7,6 +7,11 @@ source $ZSH/oh-my-zsh.sh
 export LC_CTYPE=en_US.UTF-8
 export LANG=en_US.UTF-8
 
+# User configuration
+if [ -f $HOME/.zshrc.local ]; then
+  source $HOME/.zshrc.local
+fi
+
 # Homebrew
 test -d /opt/homebrew && eval "$(/opt/homebrew/bin/brew shellenv)"
 # Linuxbrew
@@ -120,7 +125,9 @@ if checkinstall atuin; then
   eval "$(atuin init zsh --disable-up-arrow)"
 fi
 
-# User configuration
-if [ -f $HOME/.zshrc.local ]; then
-  source $HOME/.zshrc.local
+# Auto-attach tmux on ssh/mosh login. Configure per-host in ~/.zshenv.local:
+#   export SSH_TMUX_AUTO_ENABLED=true   enable
+#   export SSH_TMUX_SESSION_NAME=<name> session name, defaults to "ssh-session"
+if [ -f $HOME/.config/zsh/ssh-tmux.zsh ]; then
+  source $HOME/.config/zsh/ssh-tmux.zsh
 fi

@@ -1,1 +1,4 @@
-export PATH="/opt/homebrew/bin:$PATH"
+# homebrew
+test -d /opt/homebrew && export PATH="/opt/homebrew/bin:$PATH"
+test -d /home/linuxbrew/.linuxbrew && export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+
