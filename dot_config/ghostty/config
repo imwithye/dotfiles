@@ -1,1 +1,3 @@
-theme = "Monokai Pro"
+# Follows the macOS system appearance automatically
+theme = Aizen Dark
+shell-integration-features = ssh-env,ssh-terminfo
