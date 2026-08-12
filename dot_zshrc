@@ -125,7 +125,7 @@ if checkinstall atuin; then
   eval "$(atuin init zsh --disable-up-arrow)"
 fi
 
-# Auto-attach tmux on ssh/mosh login. Configure per-host in ~/.zshenv.local:
+# Auto-attach tmux on ssh/mosh login. Configure per-host in ~/.zshrc.local:
 #   export SSH_TMUX_AUTO_ENABLED=true   enable
 #   export SSH_TMUX_SESSION_NAME=<name> session name, defaults to "ssh-session"
 if [ -f $HOME/.config/zsh/ssh-tmux.zsh ]; then
