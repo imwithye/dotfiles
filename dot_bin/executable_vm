@@ -1,0 +1,116 @@
+#!/bin/sh
+#
+# vm — manage my GCE dev VMs
+#
+#   vm ps                        list all instances in the project
+#   vm status [name]             show status, machine type, IPs
+#   vm start [name]              start an instance
+#   vm stop [name]               stop an instance
+#   vm ssh [name] [-- ssh-args]  ssh in, starting it and waiting for sshd first
+#
+# When [name] is omitted, $VM_NAME is used, else the project's sole instance.
+# Override the project with VM_PROJECT, the ssh login with VM_USER.
+
+set -eu
+
+PROJECT="${VM_PROJECT:-imwithye-500917}"
+USER_NAME="${VM_USER:-yiwei}"
+
+# yesno(no='-') keeps missing IPs from leaving a hole in the row.
+TABLE="table(
+  name,
+  zone.basename():label=ZONE,
+  machineType.basename():label=TYPE,
+  status,
+  networkInterfaces[0].networkIP.yesno(no='-'):label=INTERNAL_IP,
+  networkInterfaces[0].accessConfigs[0].natIP.yesno(no='-'):label=EXTERNAL_IP)"
+
+# Colour only when stderr is a terminal, so pipes and logs stay plain.
+if [ -t 2 ]; then B='\033[34m'; R='\033[31m'; Z='\033[0m'; else B=; R=; Z=; fi
+# INFO is padded so both tags are 7 columns and the messages line up.
+note() { printf "${B}[INFO ]${Z} %s\n" "$*" >&2; }
+die() { printf "${R}[ERROR]${Z} %s\n" "$*" >&2; exit 1; }
+gc() { gcloud compute "$@" --project "$PROJECT"; }
+
+command -v gcloud >/dev/null || die "gcloud not found in PATH"
+
+# Sets $NAME and $ZONE, so callers never pass --zone themselves.
+pick() {
+  want="${1:-${VM_NAME:-}}"
+  out=$(gc instances list ${want:+--filter="name=$want"} \
+          --sort-by=name --format='value(name,zone.basename())') || exit 1
+  [ -n "$out" ] || die "no instance${want:+ named '$want'} in $PROJECT"
+  if [ "$(printf '%s\n' "$out" | wc -l)" -gt 1 ]; then
+    die "several instances, name one: $(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')"
+  fi
+  NAME=$(printf '%s' "$out" | cut -f1)
+  ZONE=$(printf '%s' "$out" | cut -f2)
+}
+
+show() { gc instances describe "$NAME" --zone "$ZONE" --format="$TABLE"; }
+state() { gc instances describe "$NAME" --zone "$ZONE" --format='value(status)'; }
+
+cmd_ps() { gc instances list --sort-by=name --format="$TABLE"; }
+
+cmd_status() { pick "${1:-}"; show; }
+
+cmd_start() {
+  pick "${1:-}"
+  if [ "$(state)" = RUNNING ]; then
+    note "$NAME is already running"
+  else
+    note "starting $NAME ($ZONE)..."
+    gc instances start "$NAME" --zone "$ZONE" >/dev/null
+  fi
+  show
+}
+
+cmd_stop() {
+  pick "${1:-}"
+  if [ "$(state)" = TERMINATED ]; then
+    note "$NAME is already stopped"
+  else
+    note "stopping $NAME ($ZONE)..."
+    gc instances stop "$NAME" --zone "$ZONE" >/dev/null
+  fi
+  show
+}
+
+cmd_ssh() {
+  if [ $# -gt 0 ] && [ "$1" != -- ]; then pick "$1"; shift; else pick ""; fi
+  [ "${1:-}" = -- ] && shift
+
+  if [ "$(state)" != RUNNING ]; then
+    note "starting $NAME ($ZONE)..."
+    gc instances start "$NAME" --zone "$ZONE" >/dev/null
+    # RUNNING only means the VM booted; sshd starts listening a while later,
+    # so knock until it answers instead of failing on the refused connection.
+    note "waiting for sshd on $NAME..."
+    n=0
+    until gcloud compute ssh "$USER_NAME@$NAME" --zone "$ZONE" --project "$PROJECT" \
+            --command=true -- -o ConnectTimeout=10 >/dev/null 2>&1; do
+      n=$((n + 1))
+      [ "$n" -lt 24 ] || die "$NAME still refusing ssh after 2 minutes"
+      sleep 5
+    done
+  fi
+
+  # Not via gc(): --project must precede the `--` separating gcloud's flags
+  # from the arguments handed to ssh.
+  TERM=xterm-256color exec gcloud compute ssh "$USER_NAME@$NAME" \
+    --zone "$ZONE" --project "$PROJECT" -- "$@"
+}
+
+usage() { sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; }
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  ps|ls)      cmd_ps "$@" ;;
+  status)     cmd_status "$@" ;;
+  start)      cmd_start "$@" ;;
+  stop)       cmd_stop "$@" ;;
+  ssh)        cmd_ssh "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *)          die "unknown command '$cmd' (try: ps, status, start, stop, ssh)" ;;
+esac
