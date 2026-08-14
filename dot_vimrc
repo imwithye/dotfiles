@@ -96,6 +96,9 @@ function! s:ConfigureNetrwExplorer()
   endif
   nmap <buffer> <silent> <LeftMouse> <LeftMouse>
   nmap <buffer> <silent> <2-LeftMouse> <LeftMouse><CR>
+  " Buffer-local twin of the global toggle, so Ctrl+E still closes the sidebar
+  " if netrw (or a future plugin) ever shadows the global mapping.
+  nnoremap <buffer> <silent> <C-e> :call <SID>ToggleExplorer()<CR>
 endfunction
 
 function! s:CloseExplorer(winid)
@@ -120,11 +123,11 @@ function! s:ToggleExplorer()
   endif
   let l:target = win_getid()
   execute 'Lexplore ' . fnameescape(s:ProjectRoot())
-  let l:explorer = s:NetrwWinId()
-  if l:explorer > 0 && win_id2win(l:target) > 0
+  " Lexplore leaves the cursor in the sidebar; hand it back to the file window
+  " so the tree is a passive panel and Ctrl+E keeps toggling from where you edit.
+  if win_id2win(l:target) > 0
     call win_gotoid(l:target)
     let g:netrw_chgwin = winnr()
-    call win_gotoid(l:explorer)
   endif
 endfunction
 
