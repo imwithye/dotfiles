@@ -5,6 +5,10 @@ syntax on
 filetype plugin indent on
 set number
 set mouse=a
+" popup_setpos (the 9.x default) wastes the right button on a menu; extend lets
+" right-click grow an existing selection, which is the only workable way to
+" select a range taller than the screen with the mouse.
+set mousemodel=extend
 if exists('&ttymouse') | set ttymouse=sgr | endif
 set tabstop=4 shiftwidth=4 expandtab
 set autoindent smartindent
@@ -36,6 +40,22 @@ function! s:EnsurePropTypes()
     call prop_type_add('cp_item', #{highlight: 'CPItem'})
   endif
 endfunction
+
+" --- Terminal selection mode (F2) ---
+" Hands the mouse back to the terminal emulator so its own selection (which
+" scrolls through scrollback, unlike vim's) can grab the text. Line numbers and
+" the sign column have to go too or they land in the copied text.
+function! s:ToggleTermSelect()
+  if &mouse ==# ''
+    set mouse=a number signcolumn=auto
+    echo 'mouse: vim'
+  else
+    set mouse= nonumber signcolumn=no
+    echo 'mouse: terminal (select & copy natively)'
+  endif
+endfunction
+
+nnoremap <silent> <F2> :call <SID>ToggleTermSelect()<CR>
 
 " --- File Explorer (Ctrl+E, netrw tree sidebar) ---
 let g:netrw_banner       = 0
@@ -170,6 +190,7 @@ let s:palette = [
   \ ['Edit: Redo',                 'redo'],
   \ ['Edit: Select All',           'normal! ggVG'],
   \ ['View: Toggle Line Numbers',  'set number! | set number?'],
+  \ ['View: Terminal Selection',   'call <SID>ToggleTermSelect()'],
   \ ['View: Toggle Wrap',          'set wrap! | set wrap?'],
   \ ['View: Toggle Paste Mode',    'set paste! | set paste?'],
   \ ['Quit: Save & Quit',          'wq'],
