@@ -70,6 +70,12 @@ if checkinstall neovide; then
   alias neovide='neovide --fork'
 fi
 
+if checkinstall hx; then
+  export EDITOR=hx
+  export VISUAL=hx
+  export KUBE_EDITOR=hx
+fi
+
 if checkinstall go; then
   export GOPATH=$HOME/.local/go
   export GO111MODULE=on
