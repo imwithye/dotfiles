@@ -49,6 +49,8 @@ pick() {
   want="${1:-${VM_NAME:-}}"
   out=$(gc instances list ${want:+--filter="name=$want"} \
           --sort-by=name --format='value(name,zone.basename())') || exit 1
+  # ${var:+word} still expands inside double quotes; the '...' pair is literal.
+  # shellcheck disable=SC2016
   [ -n "$out" ] || die "no instance${want:+ named '$want'} in $PROJECT"
   if [ "$(printf '%s\n' "$out" | wc -l)" -gt 1 ]; then
     die "several instances, name one: $(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')"
