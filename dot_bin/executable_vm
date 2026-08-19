@@ -4,6 +4,8 @@
 #
 #   vm ps                        list all instances in the project
 #   vm status [name]             show status, machine type, IPs
+#   vm type [name]               list machine types this VM can switch to
+#   vm type [name] <type>        switch machine type (VM must be stopped)
 #   vm start [name]              start an instance
 #   vm stop [name]               stop an instance
 #   vm ssh [name] [-- ssh-args]  ssh in, starting it and waiting for sshd first
@@ -24,6 +26,14 @@ TABLE="table(
   status,
   networkInterfaces[0].networkIP.yesno(no='-'):label=INTERNAL_IP,
   networkInterfaces[0].accessConfigs[0].natIP.yesno(no='-'):label=EXTERNAL_IP)"
+
+# Switchable families, and the memory band worth listing. The whole C family is
+# out: c2/c2d work but buy nothing over n2/n2d, c3/c3d need gVNIC and leave the
+# guest hung in NetworkManager, and n4/c4* reject this pd-balanced boot disk --
+# they want Hyperdisk, which E2 in turn cannot use. cmd_type says so per family.
+FAMILIES='e2|n2|n2d'
+MIN_GB=2
+MAX_GB=64
 
 # Colour only when stderr is a terminal, so pipes and logs stay plain.
 if [ -t 2 ]; then B='\033[34m'; R='\033[31m'; Z='\033[0m'; else B=; R=; Z=; fi
@@ -49,10 +59,67 @@ pick() {
 
 show() { gc instances describe "$NAME" --zone "$ZONE" --format="$TABLE"; }
 state() { gc instances describe "$NAME" --zone "$ZONE" --format='value(status)'; }
+mtype() { gc instances describe "$NAME" --zone "$ZONE" --format='value(machineType.basename())'; }
+
+# Emits "name<TAB>cpus<TAB>gb" for every switchable type in $ZONE.
+types() {
+  gc machine-types list --filter="zone=$ZONE" \
+      --format='value(name,guestCpus,memoryMb)' |
+  awk -F'\t' -v fam="^($FAMILIES)-" -v lo="$MIN_GB" -v hi="$MAX_GB" '
+    # gcloud already renders memoryMb as GB; the guard keeps the filter honest
+    # if a future version starts handing back raw megabytes instead.
+    { gb = ($3 > 1024) ? $3 / 1024 : $3 }
+    $1 ~ fam && gb >= lo && gb <= hi { printf "%s\t%s\t%g\n", $1, $2, gb }' |
+  sort
+}
 
 cmd_ps() { gc instances list --sort-by=name --format="$TABLE"; }
 
 cmd_status() { pick "${1:-}"; show; }
+
+cmd_type() {
+  new=
+  case $# in
+    0) pick "" ;;
+    1) # A lone argument shaped like any machine type is one -- every family, not
+       # just the switchable ones, so c4 gets a real answer instead of "no such
+       # instance". An instance named like a type needs the two-argument form.
+       case "$1" in
+         [a-z][0-9]-*|[a-z][0-9][a-z]-*|[a-z][0-9][a-z][a-z]-*)
+              pick ""; new="$1" ;;
+         *)   pick "$1" ;;
+       esac ;;
+    *) pick "$1"; new="$2" ;;
+  esac
+
+  if [ -z "$new" ]; then
+    cur=$(mtype)
+    note "$NAME is $cur -- switchable types in $ZONE (* = current):"
+    types | awk -F'\t' -v cur="$cur" \
+      '{ printf "%s %-16s %3s vCPU  %3s GB\n", ($1 == cur ? "*" : " "), $1, $2, $3 }'
+    return
+  fi
+
+  types | cut -f1 | grep -qx "$new" || case "$new" in
+    n4-*|c4-*|c4a-*|c4d-*)
+      die "$new wants a Hyperdisk boot disk; this one is pd-balanced, as E2 needs" ;;
+    c3-*|c3d-*)
+      die "$new wants gVNIC; this guest hangs in NetworkManager and never runs sshd" ;;
+    c2-*|c2d-*)
+      die "$new is excluded on purpose; use the matching n2 or n2d type instead" ;;
+    *)
+      die "'$new' is not switchable from here; run 'vm type' for the list" ;;
+  esac
+
+  # setMachineType only accepts a stopped instance. Not auto-stopping: an ssh
+  # session or a build on the box should not vanish because of a resize.
+  st=$(state)
+  [ "$st" = TERMINATED ] || die "$NAME is $st; run 'vm stop $NAME' first"
+
+  note "changing $NAME to $new..."
+  gc instances set-machine-type "$NAME" --zone "$ZONE" --machine-type "$new" >/dev/null
+  show
+}
 
 cmd_start() {
   pick "${1:-}"
@@ -101,16 +168,18 @@ cmd_ssh() {
     --zone "$ZONE" --project "$PROJECT" -- "$@"
 }
 
-usage() { sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; }
+# Prints the header block, however long it grows, minus its comment markers.
+usage() { awk 'NR > 2 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "$0"; }
 
 cmd="${1:-}"
 [ $# -gt 0 ] && shift
 case "$cmd" in
   ps|ls)      cmd_ps "$@" ;;
   status)     cmd_status "$@" ;;
+  type|types) cmd_type "$@" ;;
   start)      cmd_start "$@" ;;
   stop)       cmd_stop "$@" ;;
   ssh)        cmd_ssh "$@" ;;
   ""|-h|--help|help) usage ;;
-  *)          die "unknown command '$cmd' (try: ps, status, start, stop, ssh)" ;;
+  *)          die "unknown command '$cmd' (try: ps, status, type, start, stop, ssh)" ;;
 esac
