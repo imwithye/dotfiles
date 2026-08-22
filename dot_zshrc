@@ -26,6 +26,9 @@ test -d /opt/homebrew/opt/ruby/bin && export PATH="/opt/homebrew/opt/ruby/bin:$P
 # libpq
 test -d /opt/homebrew/opt/libpq/bin && export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
 
+# dart
+test -d $HOME/.pub-cache/bin && export PATH="$PATH":"$HOME/.pub-cache/bin"
+
 # Update Path
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
