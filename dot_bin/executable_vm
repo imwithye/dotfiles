@@ -35,11 +35,8 @@ FAMILIES='e2|n2|n2d'
 MIN_GB=2
 MAX_GB=64
 
-# Colour only when stderr is a terminal, so pipes and logs stay plain.
-if [ -t 2 ]; then B='\033[34m'; R='\033[31m'; Z='\033[0m'; else B=; R=; Z=; fi
-# INFO is padded so both tags are 7 columns and the messages line up.
-note() { printf "${B}[INFO ]${Z} %s\n" "$*" >&2; }
-die() { printf "${R}[ERROR]${Z} %s\n" "$*" >&2; exit 1; }
+. "$(dirname "$0")/shared.sh"
+
 gc() { gcloud compute "$@" --project "$PROJECT"; }
 
 command -v gcloud >/dev/null || die "gcloud not found in PATH"
@@ -145,6 +142,11 @@ cmd_stop() {
   show
 }
 
+sshd_up() {
+  gcloud compute ssh "$USER_NAME@$NAME" --zone "$ZONE" --project "$PROJECT" \
+    --command=true -- -o ConnectTimeout=10 >/dev/null 2>&1
+}
+
 cmd_ssh() {
   if [ $# -gt 0 ] && [ "$1" != -- ]; then pick "$1"; shift; else pick ""; fi
   [ "${1:-}" = -- ] && shift
@@ -155,13 +157,7 @@ cmd_ssh() {
     # RUNNING only means the VM booted; sshd starts listening a while later,
     # so knock until it answers instead of failing on the refused connection.
     note "waiting for sshd on $NAME..."
-    n=0
-    until gcloud compute ssh "$USER_NAME@$NAME" --zone "$ZONE" --project "$PROJECT" \
-            --command=true -- -o ConnectTimeout=10 >/dev/null 2>&1; do
-      n=$((n + 1))
-      [ "$n" -lt 24 ] || die "$NAME still refusing ssh after 2 minutes"
-      sleep 5
-    done
+    poll 24 sshd_up || die "$NAME still refusing ssh after 2 minutes"
   fi
 
   # Not via gc(): --project must precede the `--` separating gcloud's flags
@@ -169,9 +165,6 @@ cmd_ssh() {
   TERM=xterm-256color exec gcloud compute ssh "$USER_NAME@$NAME" \
     --zone "$ZONE" --project "$PROJECT" -- "$@"
 }
-
-# Prints the header block, however long it grows, minus its comment markers.
-usage() { awk 'NR > 2 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "$0"; }
 
 cmd="${1:-}"
 [ $# -gt 0 ] && shift

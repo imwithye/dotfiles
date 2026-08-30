@@ -1,0 +1,227 @@
+#!/bin/sh
+#
+# tailscale-k8s — install and configure the Tailscale Kubernetes operator
+#
+#   tailscale-k8s            walk through the install, step by step
+#
+# Asks for an OAuth client (id + secret) from the tailnet admin console and the
+# hostname the operator should take on the tailnet, then installs the operator
+# with the API server proxy on, so the cluster is reachable over the tailnet.
+# Nothing is written to disk: the OAuth credentials go straight into a Secret
+# in the cluster.
+#
+#   TS_K8S_CONTEXT       kube context to install into, skips the prompt
+#   TS_K8S_NAMESPACE     namespace for the operator (default: tailscale)
+#   TS_K8S_RELEASE       helm release name (default: tailscale-operator)
+#   TS_K8S_JOIN_POLLS    5s polls to wait for the operator to join (default: 24)
+#   TS_K8S_READY_POLLS   5s polls to wait for the API proxy (default: 60)
+
+set -eu
+
+NAMESPACE="${TS_K8S_NAMESPACE:-tailscale}"
+RELEASE="${TS_K8S_RELEASE:-tailscale-operator}"
+JOIN_POLLS="${TS_K8S_JOIN_POLLS:-24}"
+READY_POLLS="${TS_K8S_READY_POLLS:-60}"
+CHART_REPO="https://pkgs.tailscale.com/helmcharts"
+CRB_NAME="ts-cluster-admin"
+
+. "$(dirname "$0")/shared.sh"
+
+case "${1:-}" in
+  "") ;;
+  -h|--help|help) usage; exit 0 ;;
+  *) die "unknown argument '$1' (this script takes none; try --help)" ;;
+esac
+
+# Every step reads an answer, so a piped or backgrounded run would spin on EOF.
+[ -t 0 ] || die "tailscale-k8s is interactive; run it from a terminal"
+
+# ---------------------------------------------------------------- helpers --
+
+# The OAuth values are interpolated into YAML, so anything outside this set is
+# refused rather than quoted around.
+plain() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_.:-]+$'; }
+# A DNS label, as MagicDNS wants it: lowercase, digits, inner hyphens, <= 63.
+label() { printf '%s' "$1" | grep -Eq '^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$'; }
+# Best-effort DNS label out of any string: "gke_proj_us-east1_My.Cluster" ->
+# "gke-proj-us-east1-my-cluster". Only a default; the answer is validated anyway.
+to_label() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' |
+    sed 's/^-*//; s/-*$//' | cut -c1-63
+}
+
+kc() { kubectl --context "$CONTEXT" "$@"; }
+ts_status() { $TS status --json 2>/dev/null; }
+# Prints the DNSName of the peer whose hostname is $1, if it has joined.
+peer_dns() {
+  ts_status | jq -er --arg h "$1" \
+    '[.Peer[]? | select(.HostName == $h)][0].DNSName // empty | rtrimstr(".")'
+}
+
+# ------------------------------------------------ step 1: check the toolchain --
+
+step "Step 1/6 — checking kubectl, helm, tailscale"
+
+# Homebrew, apt and the standalone tarball all land in PATH; the macOS app
+# bundle does not, and it is the usual way Tailscale arrives on a Mac.
+if command -v tailscale >/dev/null 2>&1; then
+  TS=$(command -v tailscale)
+elif [ -x /Applications/Tailscale.app/Contents/MacOS/tailscale ]; then
+  TS=/Applications/Tailscale.app/Contents/MacOS/tailscale
+else
+  case "$(uname -s)" in
+    Darwin) die "tailscale not found; install it from https://tailscale.com/download/mac" ;;
+    *) die "tailscale not found; install it from https://tailscale.com/download/linux" ;;
+  esac
+fi
+
+for _c in kubectl helm jq curl; do
+  command -v "$_c" >/dev/null 2>&1 || die "$_c not found in PATH"
+  note "$_c: $(command -v "$_c")"
+done
+note "tailscale: $TS"
+
+# --json is the only reliable read: `tailscale status` prints its complaint on
+# stdout, and its exit code says nothing about which of the down states it is in.
+TS_STATE=$(ts_status | jq -r '.BackendState // empty')
+[ "$TS_STATE" = Running ] ||
+  die "tailscale is not connected (state: ${TS_STATE:-unknown}); run 'tailscale up' first"
+
+MAGIC_DNS=$($TS dns status 2>/dev/null | awk '/tailnet-wide/ {print $NF}' | tr -d ')')
+[ -n "$MAGIC_DNS" ] || die "could not read the MagicDNS suffix; is MagicDNS enabled for this tailnet?"
+note "tailnet: $MAGIC_DNS"
+
+# The cluster is settled here, before any question, so the endpoint-name
+# default below can be taken from the context that will actually be used.
+if [ -n "${TS_K8S_CONTEXT:-}" ]; then
+  CONTEXT="$TS_K8S_CONTEXT"
+else
+  CONTEXT=$(kubectl config current-context 2>/dev/null || true)
+  if [ -z "$CONTEXT" ] || ! ask "Install into context '$CONTEXT'?" y; then
+    note "contexts in this kubeconfig:"
+    kubectl config get-contexts -o name | sed 's/^/  /' >&2
+    prompt "Context to install into" "$CONTEXT"; CONTEXT="$ANSWER"
+  fi
+fi
+kubectl config get-contexts "$CONTEXT" >/dev/null 2>&1 ||
+  die "context '$CONTEXT' is not in this kubeconfig"
+kc get --raw /version >/dev/null 2>&1 ||
+  die "cannot reach the cluster behind context '$CONTEXT'"
+note "cluster: $CONTEXT"
+
+# ---------------------------------------------- step 2: the OAuth credentials --
+
+step "Step 2/6 — OAuth client for the operator"
+note "create one at https://login.tailscale.com/admin/settings/oauth"
+note "give it these scopes:"
+note "  General > Services:   Read and Write"
+note "  Devices > Core:       Read and Write"
+note "  Keys > Auth Keys:     Read and Write"
+
+until prompt "OAuth client ID" && plain "$ANSWER"; do
+  warn "that does not look like a client ID (letters, digits, . _ : - only)"
+done
+CLIENT_ID="$ANSWER"
+
+until prompt -s "OAuth client secret (hidden)" && plain "$ANSWER"; do
+  warn "that does not look like a client secret (letters, digits, . _ : - only)"
+done
+CLIENT_SECRET="$ANSWER"
+case "$CLIENT_SECRET" in
+  tskey-client-*) ;;
+  *) warn "client secrets normally start with 'tskey-client-'; using it anyway" ;;
+esac
+
+# ------------------------------------------------- step 3: the tailnet name --
+
+step "Step 3/6 — endpoint name on the tailnet"
+note "this becomes the operator's device name, e.g. <name>.$MAGIC_DNS"
+
+while :; do
+  prompt "Endpoint name" "$(to_label "$CONTEXT")"
+  HOSTNAME_TS="$ANSWER"
+  if ! label "$HOSTNAME_TS"; then
+    warn "use a DNS label: lowercase letters, digits and hyphens, 63 at most"
+  # Tailscale does not refuse a duplicate; it quietly hands out "<name>-1".
+  elif peer_dns "$HOSTNAME_TS" >/dev/null; then
+    warn "a device named $HOSTNAME_TS is already on the tailnet"
+    ask "Use it anyway?" n && break
+  else
+    break
+  fi
+done
+FQDN="$HOSTNAME_TS.$MAGIC_DNS"
+note "the operator will appear as $FQDN"
+
+# ------------------------------------------------- step 4: install the chart --
+
+step "Step 4/6 — installing the operator"
+
+note "creating namespace $NAMESPACE"
+kc create namespace "$NAMESPACE" --dry-run=client -o yaml | kc apply -f - >/dev/null
+
+# Piped in rather than passed as --from-literal: command-line arguments are
+# visible to every other process on the box for as long as kubectl runs.
+note "storing the OAuth client in secret/operator-oauth"
+kc apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: operator-oauth
+  namespace: $NAMESPACE
+stringData:
+  client_id: "$CLIENT_ID"
+  client_secret: "$CLIENT_SECRET"
+EOF
+
+note "adding the tailscale helm repo"
+helm repo add tailscale "$CHART_REPO" --force-update >/dev/null
+helm repo update tailscale >/dev/null
+
+# apiServerProxyConfig.mode defaults to "false"; "true" is what puts the API
+# server behind $HOSTNAME_TS and renders the proxy's impersonation ClusterRole.
+# It has to be --set-string: the chart compares it as a string, not a bool.
+# --wait already blocks until the operator deployment is ready.
+note "running helm upgrade --install $RELEASE"
+helm upgrade --install "$RELEASE" tailscale/tailscale-operator \
+  --namespace "$NAMESPACE" \
+  --kube-context "$CONTEXT" \
+  --set-string operatorConfig.hostname="$HOSTNAME_TS" \
+  --set-string apiServerProxyConfig.mode="true" \
+  --wait
+
+# ------------------------------------------------ step 5: wait for the device --
+
+step "Step 5/6 — waiting for the operator to join the tailnet"
+
+# The deployment being ready only means the pod started; the device shows up in
+# `tailscale status` once it has authenticated with the OAuth client. Its real
+# DNS name is read back rather than assumed, in case Tailscale renamed it.
+if poll "$JOIN_POLLS" peer_dns "$HOSTNAME_TS" >/dev/null; then
+  FQDN=$(peer_dns "$HOSTNAME_TS")
+  note "$FQDN is up"
+else
+  warn "$HOSTNAME_TS has not appeared in the tailnet yet"
+  warn "check 'kubectl -n $NAMESPACE logs deploy/operator' — a bad OAuth client fails here"
+fi
+
+# ------------------------------------------------- step 6: API server access --
+
+step "Step 6/6 — API server access over the tailnet"
+
+ready() { [ "$(curl -fs --max-time 10 "https://$FQDN/readyz" 2>/dev/null)" = ok ]; }
+note "waiting for https://$FQDN/readyz"
+poll "$READY_POLLS" ready ||
+  die "the proxy never answered /readyz; check the ACLs and the operator logs"
+
+TS_USER=$(ts_status | jq -r '.User[.Self.UserID | tostring].LoginName // empty')
+[ -n "$TS_USER" ] || die "could not work out your tailnet login name from 'tailscale status'"
+
+note "granting cluster-admin to $TS_USER"
+kc create clusterrolebinding "$CRB_NAME" --clusterrole=cluster-admin --user="$TS_USER" \
+  --dry-run=client -o yaml | kc apply -f - >/dev/null
+
+note "adding $FQDN to your kubeconfig"
+$TS configure kubeconfig "$FQDN"
+
+note "done — try: kubectl --context $FQDN get nodes"
