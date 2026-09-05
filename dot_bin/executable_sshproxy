@@ -1,0 +1,93 @@
+#!/bin/sh
+#
+# sshproxy — run a command with its traffic tunnelled through an ssh host
+#
+#   sshproxy [user@]host <command...>   run the command behind a SOCKS5 proxy
+#   sshproxy [user@]host                open a shell with the proxy exported
+#
+# Opens a throwaway `ssh -D` SOCKS5 tunnel to the host, exports the usual proxy
+# variables into the command's environment, and closes the tunnel again when the
+# command exits, whatever it exits with.
+#
+#   sshproxy yiwei@macos git clone https://github.com/foo/bar.git
+#   sshproxy macos curl -s https://ifconfig.me
+#
+# The command's exit status is passed through. Extra ssh options come from
+# SSHPROXY_SSH_OPTS, e.g. SSHPROXY_SSH_OPTS='-p 2222 -i ~/.ssh/other'.
+
+set -eu
+
+. "$(dirname "$0")/shared.sh"
+
+[ $# -ge 1 ] || { usage; exit 2; }
+case "$1" in -h|--help|help) usage; exit 0 ;; esac
+
+HOST="$1"; shift
+
+# The control socket lets us shut the master down by name later; CTL stays empty
+# until the master is actually up, so cleanup knows there is nothing to close.
+CTL=
+cleanup() {
+  [ -n "$CTL" ] || return 0
+  _ctl="$CTL"; CTL=
+  ssh -S "$_ctl" -O exit "$HOST" 2>/dev/null || :
+  rm -f "$_ctl"
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
+# A random high port, so two sshproxy runs side by side do not collide. nc tells
+# us whether one is already listening; without nc we just take the port and let
+# ssh's ExitOnForwardFailure catch the rare clash.
+free_port() {
+  _tries=0
+  while [ $((_tries += 1)) -le 20 ]; do
+    _n=$(od -An -N2 -tu2 < /dev/urandom | tr -d ' ')
+    _p=$((20000 + _n % 40000))
+    if ! command -v nc >/dev/null 2>&1 || ! nc -z 127.0.0.1 "$_p" 2>/dev/null; then
+      echo "$_p"; return 0
+    fi
+  done
+  return 1
+}
+
+PORT=$(free_port) || die "no free local port for the tunnel"
+CTL="${TMPDIR:-/tmp}/sshproxy-$$-$PORT.sock"
+
+# -f backgrounds the master once the forward is up, -N -T so it runs no command
+# and asks for no tty; the forward failing must be fatal or we would proxy into
+# nothing. Unquoted so SSHPROXY_SSH_OPTS splits into separate ssh arguments.
+# shellcheck disable=SC2086
+ssh -M -S "$CTL" -fNT -D "127.0.0.1:$PORT" \
+    -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
+    ${SSHPROXY_SSH_OPTS:-} "$HOST" || { CTL=; die "could not open a tunnel to $HOST"; }
+
+note "socks5 proxy on 127.0.0.1:$PORT via $HOST"
+
+# socks5h so the *remote* end resolves the names too, which is usually the point
+# of proxying in the first place.
+P="socks5h://127.0.0.1:$PORT"
+N="localhost,127.0.0.1,::1"
+export ALL_PROXY="$P" all_proxy="$P"
+export HTTP_PROXY="$P" http_proxy="$P"
+export HTTPS_PROXY="$P" https_proxy="$P"
+export NO_PROXY="$N" no_proxy="$N"
+export SSHPROXY_HOST="$HOST" SSHPROXY_PORT="$PORT"
+
+# git over ssh ignores the proxy variables, so it gets its own ssh with a netcat
+# ProxyCommand; git splits GIT_SSH_COMMAND shell-style, so the quotes survive.
+if command -v nc >/dev/null 2>&1; then
+  export GIT_SSH_COMMAND="ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:$PORT %h %p'"
+else
+  warn "nc not found: git-over-ssh and other ProxyCommand users stay direct"
+fi
+
+# No command means an interactive shell, so you can poke around behind the proxy.
+[ $# -gt 0 ] || set -- "${SHELL:-/bin/sh}"
+
+set +e
+"$@"
+rc=$?
+set -e
+exit $rc

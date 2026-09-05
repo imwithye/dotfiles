@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# git graph -- open the repository history in serie (https://github.com/lusingander/serie)
+set -euo pipefail
+
+if ! command -v serie >/dev/null 2>&1; then
+  cat >&2 <<'MSG'
+git graph requires serie, but the command was not found.
+
+Install it with one of the following:
+  brew install lusingander/tap/serie
+  cargo install --locked serie
+
+More info: https://github.com/lusingander/serie
+MSG
+  exit 127
+fi
+
+exec serie "$@"
