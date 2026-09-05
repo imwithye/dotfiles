@@ -1,0 +1,93 @@
+#!/bin/sh
+#
+# sshchrome — run Chrome with all of its traffic tunnelled through an ssh host
+#
+#   sshchrome [user@]host [url...]   open Chrome behind a SOCKS5 proxy
+#
+# Opens a throwaway `ssh -D` SOCKS5 tunnel with sshproxy, then starts Chrome
+# pointed at it in a profile of its own, and tears the tunnel down again when
+# Chrome quits. Page loads *and* DNS lookups go out at the far end.
+#
+#   sshchrome yiwei@macos https://ifconfig.me
+#   sshchrome macos
+#
+# The profile lives in ~/.local/share/sshchrome so logins survive between runs —
+# under share rather than cache, since a cache is something anything may sweep
+# up and these logins are worth keeping. A profile apart from the everyday one
+# is unavoidable anyway, since a Chrome that is already running would ignore the
+# proxy and just open a tab in the unproxied window.
+#
+# There is only ever the one, and keeping several identities apart is Chrome's
+# own job: add a profile in its picker and it will keep them separate inside.
+#
+# Chrome's exit status is passed through. Anything after the host is handed to
+# Chrome as-is, so extra flags work too. Overrides:
+#
+#   SSHCHROME_BIN       the browser binary (default: the first Chrome found)
+#   SSHCHROME_DIR       the profile directory
+#   SSHPROXY_SSH_OPTS   extra ssh options, e.g. '-p 2222'
+
+set -eu
+
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$DIR/shared.sh"
+
+# Bundled apps first, since a Mac with Chrome installed rarely has it on PATH,
+# then the usual Linux command names.
+find_chrome() {
+  if [ -n "${SSHCHROME_BIN:-}" ]; then printf '%s\n' "$SSHCHROME_BIN"; return 0; fi
+  for _c in \
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+    "/Applications/Chromium.app/Contents/MacOS/Chromium" \
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" \
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+  do
+    if [ -x "$_c" ]; then printf '%s\n' "$_c"; return 0; fi
+  done
+  for _c in google-chrome google-chrome-stable chromium chromium-browser brave-browser; do
+    if _p=$(command -v "$_c" 2>/dev/null); then printf '%s\n' "$_p"; return 0; fi
+  done
+  return 1
+}
+
+# First pass: no tunnel yet, so hand ourselves to sshproxy and come back here
+# with SSHPROXY_PORT set. That keeps every bit of tunnel handling — the control
+# socket, the port search, the cleanup traps — in sshproxy alone. The argument
+# check belongs in here too, since by the second pass the host is gone and
+# nothing at all is a perfectly good way to ask for a browser.
+if [ -z "${SSHPROXY_PORT:-}" ]; then
+  [ $# -ge 1 ] || { usage; exit 2; }
+  case "$1" in -h|--help|help) usage; exit 0 ;; esac
+  HOST="$1"; shift
+  exec "$DIR/sshproxy" "$HOST" "$DIR/sshchrome" "$@"
+fi
+
+# Second pass: the tunnel is up and sshproxy is waiting on us, so all that is
+# left is to become Chrome.
+HOST="${SSHPROXY_HOST:-the ssh host}"
+CHROME=$(find_chrome) || die "no Chrome found; set SSHCHROME_BIN to the binary"
+
+PROFILE="${SSHCHROME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/sshchrome}"
+mkdir -p "$PROFILE" || die "could not create the profile directory $PROFILE"
+
+note "chrome via $HOST, profile $PROFILE"
+
+# socks5 in Chrome already resolves names at the proxy, but only for hostnames
+# it decides to send there; the resolver rule makes local DNS impossible at all,
+# so nothing can leak a lookup while the proxy is what answers every request.
+# 127.0.0.1 stays excluded so a local dev server is still reachable.
+#
+# Chrome then puts a yellow "unsupported command-line flag" bar above every page
+# it opens. --test-type is what silences it: it only tells Chrome it is being
+# driven rather than used, and costs nothing here beyond a few dialogs this
+# throwaway browser has no use for. Drop it to keep the warning instead.
+#
+# exec, so Chrome inherits this process and sshproxy waits on Chrome itself —
+# its exit status is then ours, and the tunnel closes the moment Chrome quits.
+exec "$CHROME" \
+  --user-data-dir="$PROFILE" \
+  --proxy-server="socks5://127.0.0.1:$SSHPROXY_PORT" \
+  --host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE 127.0.0.1" \
+  --test-type \
+  --no-first-run --no-default-browser-check \
+  "$@"
