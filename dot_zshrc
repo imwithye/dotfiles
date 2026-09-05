@@ -29,6 +29,9 @@ test -d /opt/homebrew/opt/libpq/bin && export PATH="/opt/homebrew/opt/libpq/bin:
 # dart
 test -d $HOME/.pub-cache/bin && export PATH="$PATH":"$HOME/.pub-cache/bin"
 
+# tailscale
+test -d /Applications/Tailscale.app/Contents/MacOS && export PATH="$PATH":"/Applications/Tailscale.app/Contents/MacOS"
+
 # Update Path
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
