@@ -1,0 +1,140 @@
+#!/bin/sh
+#
+# sshgcloud — run gcloud, and the browser it logs in with, through an ssh host
+#
+#   sshgcloud [user@]host <gcloud args...>   run gcloud behind a SOCKS5 proxy
+#
+# Opens a throwaway `ssh -D` SOCKS5 tunnel with sshproxy, points gcloud at it,
+# and hands gcloud a browser that sshchrome opens down the same tunnel, so both
+# halves of a login leave from the far end. The tunnel closes when gcloud exits.
+#
+#   sshgcloud yiwei@vm auth login
+#   sshgcloud vm auth application-default login
+#   sshgcloud vm compute instances list
+#
+# This is for the case where the ssh host is what the organisation trusts: an
+# access level keyed on its address lets it through while the Mac you are
+# sitting at does not match. Proxying gcloud alone is not enough, because the
+# OAuth pages are checked as well — hence a browser down the same tunnel.
+#
+# Do not pass --no-launch-browser: it asks for a token to be used on another
+# machine, which is the one thing a context-aware policy will not hand out.
+#
+# The login browser shares sshchrome's profile, so a Google session you already
+# have there is one you can log in with. A window sshgcloud opened itself is
+# closed again with the tunnel — one left behind would hold a dead proxy and
+# swallow the next run's window into a tab — while a browser you already had
+# open is left alone and the login just becomes a tab in it. That tab leaves by
+# whichever tunnel that browser was started on, so it is worth a look when the
+# two hosts differ. Point SSHCHROME_DIR elsewhere for a profile of its own.
+# Overrides:
+#
+#   SSHGCLOUD_BIN       the gcloud binary (default: the first one on PATH)
+#   SSHCHROME_DIR       the login browser's profile directory
+#   SSHPROXY_SSH_OPTS   extra ssh options, e.g. '-p 2222'
+
+set -eu
+
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$DIR/shared.sh"
+
+# First pass: no tunnel yet, so hand ourselves to sshproxy and come back here
+# with SSHPROXY_PORT set, the same way sshchrome does. All of the tunnel
+# handling then stays in sshproxy alone.
+if [ -z "${SSHPROXY_PORT:-}" ]; then
+  [ $# -ge 1 ] || { usage; exit 2; }
+  case "$1" in -h|--help|help) usage; exit 0 ;; esac
+  HOST="$1"; shift
+  [ $# -ge 1 ] || die "nothing to run; try: sshgcloud $HOST auth login"
+  exec "$DIR/sshproxy" "$HOST" "$DIR/sshgcloud" "$@"
+fi
+
+# Second pass: the tunnel is up and sshproxy is waiting on us.
+HOST="${SSHPROXY_HOST:-the ssh host}"
+
+if [ -n "${SSHGCLOUD_BIN:-}" ]; then
+  GCLOUD="$SSHGCLOUD_BIN"
+elif GCLOUD=$(command -v gcloud 2>/dev/null); then
+  :
+else
+  die "no gcloud on PATH; set SSHGCLOUD_BIN to the binary"
+fi
+
+for _a in "$@"; do
+  case "$_a" in
+    --no-launch-browser|--no-browser)
+      warn "$_a marks the token as bound for another machine, which is what the policy refuses" ;;
+  esac
+done
+
+# gcloud reads these ahead of the http_proxy variables sshproxy exports, and
+# unlike `gcloud config set proxy/*` they are gone again when this command is.
+# The socks support itself lives in PySocks, which the bundled python only puts
+# on its path when it is told to look at site-packages.
+export CLOUDSDK_PROXY_TYPE=socks5
+export CLOUDSDK_PROXY_ADDRESS=127.0.0.1
+export CLOUDSDK_PROXY_PORT="$SSHPROXY_PORT"
+export CLOUDSDK_PYTHON_SITEPACKAGES=1
+
+# sshchrome's own profile, so its Google session is there to log in with.
+PROFILE="${SSHCHROME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/sshchrome}"
+export SSHCHROME_DIR="$PROFILE"
+
+SHIM=$(mktemp "${TMPDIR:-/tmp}/sshgcloud-browser-XXXXXX") || die "could not write the browser shim"
+PIDFILE="$SHIM.pid"
+cleanup() {
+  # Only a pid the shim left behind, and only while it is still alive: the
+  # profile is shared, and a browser that was open before us is not ours to
+  # close.
+  if [ -s "$PIDFILE" ]; then
+    read -r _pid < "$PIDFILE" || _pid=
+    if [ -n "${_pid:-}" ] && kill -0 "$_pid" 2>/dev/null; then
+      kill "$_pid" 2>/dev/null || :
+    fi
+  fi
+  rm -f "$SHIM" "$PIDFILE"
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
+# python's webbrowser runs BROWSER as one plain command and waits for it, while
+# gcloud has to stay free to answer its own OAuth callback on localhost — so the
+# browser goes to the background and leaves its pid where cleanup can find it.
+# sshchrome, seeing SSHPROXY_PORT already set, skips straight to being Chrome on
+# this tunnel. Chrome bypasses proxies for localhost, so the callback arrives.
+cat > "$SHIM" <<EOF
+#!/bin/sh
+if pgrep -f -- "--user-data-dir=$PROFILE" >/dev/null 2>&1; then
+  # A browser is already on this profile: the URL lands as a tab in it, on
+  # whatever tunnel that one was started with, and there is no pid of ours to
+  # write down since the process we start hands the URL over and exits.
+  printf '[WARN ] the login opens in the browser already on this profile, by its own tunnel\\n' >&2
+  "$DIR/sshchrome" "\$@" >/dev/null 2>&1 &
+else
+  "$DIR/sshchrome" "\$@" >/dev/null 2>&1 &
+  echo \$! > "$PIDFILE"
+fi
+EOF
+chmod +x "$SHIM"
+export BROWSER="$SHIM"
+
+note "gcloud via $HOST, login browser profile $PROFILE"
+
+set +e
+"$GCLOUD" "$@"
+rc=$?
+set -e
+
+# Worth the second `gcloud info` costs only once something has already failed:
+# without PySocks every request through the proxy dies, and nothing gcloud
+# prints says which of the two it was.
+if [ "$rc" -ne 0 ]; then
+  PY=$("$GCLOUD" info --format='value(basic.python_location)' 2>/dev/null) || PY=
+  if [ -n "$PY" ] && ! "$PY" -c 'import socks' >/dev/null 2>&1; then
+    warn "gcloud's python cannot speak socks5; PySocks is missing. install it with:"
+    warn "  CLOUDSDK_PYTHON_SITEPACKAGES=1 \"$PY\" -m pip install pysocks"
+  fi
+fi
+
+exit $rc

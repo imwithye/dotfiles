@@ -75,7 +75,12 @@ note "chrome via $HOST, profile $PROFILE"
 # socks5 in Chrome already resolves names at the proxy, but only for hostnames
 # it decides to send there; the resolver rule makes local DNS impossible at all,
 # so nothing can leak a lookup while the proxy is what answers every request.
-# 127.0.0.1 stays excluded so a local dev server is still reachable.
+#
+# The loopback names stay excluded so a local dev server is still reachable, and
+# every one of them has to be named: Chrome bypasses the proxy for loopback on
+# its own, but an excluded 127.0.0.1 says nothing about localhost, which is then
+# a name like any other for ~NOTFOUND to swallow. An OAuth callback on
+# http://localhost:PORT/ is exactly the request that goes missing.
 #
 # Chrome then puts a yellow "unsupported command-line flag" bar above every page
 # it opens. --test-type is what silences it: it only tells Chrome it is being
@@ -87,7 +92,7 @@ note "chrome via $HOST, profile $PROFILE"
 exec "$CHROME" \
   --user-data-dir="$PROFILE" \
   --proxy-server="socks5://127.0.0.1:$SSHPROXY_PORT" \
-  --host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE 127.0.0.1" \
+  --host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE localhost , EXCLUDE *.localhost , EXCLUDE 127.0.0.1 , EXCLUDE ::1" \
   --test-type \
   --no-first-run --no-default-browser-check \
   "$@"
