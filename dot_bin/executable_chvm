@@ -5,6 +5,8 @@
 #   chvm status                     the instance, its volumes and its SSM state
 #   chvm create [type] [root-gb]    create the box and install your ssh key
 #   chvm ssh [-- args...]           ssh in over SSM, with the agent forwarded
+#   chvm stop                       stop it: you keep the disks, not the bill
+#   chvm start                      start it again and wait for ssm
 #   chvm volume [list]              list the attached volumes
 #   chvm volume add [gb] [type]     create an extra EBS data volume and attach it
 #   chvm volume rm <volume-id>      detach and delete one of them
@@ -17,6 +19,7 @@
 #   chvm ssh -- uptime           run one command and come straight back
 #   chvm status                  where it is, what it costs you, is ssm up
 #   chvm volume add 500          another 500 GB to put a zpool on
+#   chvm stop                    park it overnight, disks and all
 #   chvm delete                  throw it away
 #
 # The box is per-user and there is only ever one of it, so none of these take a
@@ -469,6 +472,31 @@ volume_rm() {
   note "$_vol is gone"
 }
 
+cmd_start() {
+  need_instance
+  if [ "$(fld .State.Name)" = running ] && ssm_online; then
+    note "$NAME is already up"
+  else
+    ensure_up
+  fi
+  note "get on it with: chvm ssh"
+}
+
+# Stopping is what makes the box cheap between sessions: the instance-hours go
+# away, the disks stay -- and so does everything on them.
+cmd_stop() {
+  need_instance
+  case "$(fld .State.Name)" in
+    stopped)  note "$NAME is already stopped"; return 0 ;;
+    stopping) note "$NAME is already stopping..." ;;
+    *)        note "stopping $ID..."; aws_ ec2 stop-instances --instance-ids "$ID" >/dev/null ;;
+  esac
+  aws_ ec2 wait instance-stopped --instance-ids "$ID"
+  _gb=$(aws_ ec2 describe-volumes --filters "Name=attachment.instance-id,Values=$ID" \
+        --query 'sum(Volumes[].Size)' --output text 2>/dev/null || echo)
+  note "$ID is stopped; its ${_gb:-} GB of disk is still there, and still billed"
+}
+
 cmd_volume() {
   _sub=list
   if [ $# -gt 0 ]; then _sub="$1"; shift; fi
@@ -503,8 +531,10 @@ case "$cmd" in
   status|st)  cmd_status "$@" ;;
   create|new) cmd_create "$@" ;;
   ssh)        cmd_ssh "$@" ;;
+  start|up)   cmd_start "$@" ;;
+  stop|down)  cmd_stop "$@" ;;
   volume|vol) cmd_volume "$@" ;;
   delete)     cmd_delete "$@" ;;
   ""|-h|--help|help) usage ;;
-  *)          die "unknown command '$cmd' (try: status, create, ssh, volume, delete)" ;;
+  *)          die "unknown command '$cmd' (try: status, create, ssh, stop, start, volume, delete)" ;;
 esac
