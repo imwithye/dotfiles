@@ -37,9 +37,10 @@
 # ssh uses the 1Password agent when its socket is there, and forwards it, so a
 # git push from the box signs with the same keys as one from here. Without one
 # it falls back to $SSH_AUTH_SOCK, and to ~/.ssh/id_*.pub when no agent has a
-# key to give -- 1Password is what it prefers, not what it needs. No ports are
-# forwarded unless you name some in CHVM_FORWARDS; ~/.opener.sock is sent over
-# when this Mac has one.
+# key to give -- 1Password is what it prefers, not what it needs. Port 31337
+# comes back to localhost, because that is where `dataplanectl login` waits for
+# its Okta callback and the browser is on this side; name any others you want in
+# CHVM_FORWARDS. ~/.opener.sock is sent over when this Mac has one.
 #
 # Overrides:
 #
@@ -51,7 +52,7 @@
 #   CHVM_AMI           an AMI id, skipping the lookup
 #   CHVM_AGENT         ssh agent socket to use and forward
 #   CHVM_KEY           a .pub file for create to install, instead of an agent's
-#   CHVM_FORWARDS      ports to forward to localhost, e.g. '34675 8080'
+#   CHVM_FORWARDS      ports forwarded to localhost (default 31337)
 #   CHVM_SSH_OPTS      extra ssh options, e.g. '-D 1080'
 #   CHVM_KEEP_VOLUME   set so an added volume outlives the instance
 #   CHVM_YES           set to skip the delete confirmations
@@ -62,7 +63,7 @@ REGION="${CHVM_REGION:-us-west-2}"
 PROFILE="${CHVM_PROFILE:-Dev_AWS_Admin}"
 TYPE="${CHVM_TYPE:-m5.8xlarge}"
 ROOT_GB="${CHVM_ROOT_GB:-200}"
-FORWARDS="${CHVM_FORWARDS:-}"
+FORWARDS="${CHVM_FORWARDS:-31337}"
 
 # Filled in by resolve_name, and blanked here so an exported NAME cannot stand
 # in for the instance's own.
@@ -413,8 +414,9 @@ cmd_ssh() {
   # checking it buys nothing and pinning it would just rot in known_hosts.
   set -- "$@" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
 
-  # Empty by default: word splitting is the point when CHVM_FORWARDS does name
-  # ports. A port already taken here only loses that one forward, not the session.
+  # 31337 by default, for the Okta callback; word splitting is the point when
+  # CHVM_FORWARDS names more. A port already taken on this side only loses that
+  # one forward, not the session.
   for _p in $FORWARDS; do set -- "$@" -L "$_p:localhost:$_p"; done
 
   # StreamLocalBindUnlink so a socket left behind by a dropped session does not
