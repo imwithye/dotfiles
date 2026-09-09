@@ -1,0 +1,510 @@
+#!/bin/sh
+#
+# chvm — manage my ClickHouse data-plane dev box on EC2
+#
+#   chvm status                     the instance, its volumes and its SSM state
+#   chvm create [type] [root-gb]    create the box and install your ssh key
+#   chvm ssh [-- args...]           ssh in over SSM, with the agent forwarded
+#   chvm volume [list]              list the attached volumes
+#   chvm volume add [gb] [type]     create an extra EBS data volume and attach it
+#   chvm volume rm <volume-id>      detach and delete one of them
+#   chvm delete                     terminate the box
+#
+# A day with it:
+#
+#   chvm create                  make the box and stop there
+#   chvm ssh                     get on it and set it up yourself
+#   chvm ssh -- uptime           run one command and come straight back
+#   chvm status                  where it is, what it costs you, is ssm up
+#   chvm volume add 500          another 500 GB to put a zpool on
+#   chvm delete                  throw it away
+#
+# The box is per-user and there is only ever one of it, so none of these take a
+# name: they all mean the instance tagged <sso-user>-dp-dev in CHVM_REGION.
+#
+# The box lives in a private subnet with no public IP, so every connection goes
+# through SSM: there is no security group to keep in step with your address, and
+# no ssh config either -- `chvm ssh` passes the whole thing on the command line
+# and leaves ~/.ssh/config alone. It finds the instance by its Name tag each
+# time, so there is no state file to go stale when you recreate the box.
+#
+# Nothing is provisioned for you. `create` installs your ssh key and stops; ssh
+# in and set the box up however you like.
+#
+# ssh uses the 1Password agent when its socket is there, and forwards it, so a
+# git push from the box signs with the same keys as one from here. No ports are
+# forwarded unless you name some in CHVM_FORWARDS; ~/.opener.sock is sent over
+# when this Mac has one.
+#
+# Overrides:
+#
+#   CHVM_REGION        region to work in            (default us-west-2)
+#   CHVM_PROFILE       AWS profile to use           (default Dev_AWS_Admin)
+#   CHVM_NAME          the instance's Name tag      (default <sso-user>-dp-dev)
+#   CHVM_TYPE          default instance type        (default m5.8xlarge)
+#   CHVM_ROOT_GB       default root volume size     (default 200)
+#   CHVM_AMI           an AMI id, skipping the lookup
+#   CHVM_AGENT         ssh agent socket to use and forward
+#   CHVM_FORWARDS      ports to forward to localhost, e.g. '34675 8080'
+#   CHVM_SSH_OPTS      extra ssh options, e.g. '-D 1080'
+#   CHVM_KEEP_VOLUME   set so an added volume outlives the instance
+#   CHVM_YES           set to skip the delete confirmations
+
+set -eu
+
+REGION="${CHVM_REGION:-us-west-2}"
+PROFILE="${CHVM_PROFILE:-Dev_AWS_Admin}"
+TYPE="${CHVM_TYPE:-m5.8xlarge}"
+ROOT_GB="${CHVM_ROOT_GB:-200}"
+FORWARDS="${CHVM_FORWARDS:-}"
+
+# Filled in by resolve_name, and blanked here so an exported NAME cannot stand
+# in for the instance's own.
+NAME=
+
+# The instance profile that lets SSM talk to the box; without it there is no
+# way in at all, since the box has no public address.
+SSM_PROFILE="${CHVM_SSM_PROFILE:-AmazonSSMRoleForInstancesQuickSetup}"
+# The dev images are private, tagged is-latest=true, and carry this in their
+# name, Name tag or description.
+AMI_PATTERN="${CHVM_AMI_PATTERN:-clickhouse-dev}"
+# The login baked into those images.
+LOGIN=ubuntu
+# 1Password's agent, if this Mac has one.
+OP_AGENT="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+
+. "$(dirname "$0")/shared.sh"
+
+command -v aws >/dev/null || die "aws not found in PATH"
+command -v jq >/dev/null || die "jq not found in PATH"
+
+aws_() { aws "$@" --region "$REGION" --profile "$PROFILE"; }
+row() { printf '%-12s %s\n' "$1" "$2"; }
+
+# The SSO role session name is the login email, so firstname.lastname@… becomes
+# firstname-lastname -- the same identifier the old make flow used, so a box
+# created by that one is still found by this.
+resolve_name() {
+  [ -z "$NAME" ] || return 0
+  if [ -n "${CHVM_NAME:-}" ]; then NAME="$CHVM_NAME"; return 0; fi
+  _arn=$(aws_ sts get-caller-identity --query Arn --output text 2>/dev/null) ||
+    die "not signed in; run: aws sso login --profile $PROFILE"
+  NAME=$(printf '%s\n' "$_arn" | sed 's|.*/||; s|@.*||' | tr '.' '-' | tr '[:upper:]' '[:lower:]')
+  [ -n "$NAME" ] || die "could not read a user name out of $_arn; set CHVM_NAME"
+  NAME="$NAME-dp-dev"
+}
+
+# Sets $INST to the instance's json and $ID to its id; $ID is empty when there
+# is no box. Terminated ones are ignored, so a delete followed by a create sees
+# a clean slate even while the old id is still listed.
+find_instance() {
+  resolve_name
+  _json=$(aws_ ec2 describe-instances \
+    --filters "Name=tag:Name,Values=$NAME" \
+              "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+    --query 'Reservations[].Instances[]' --output json) || exit 1
+  ID=$(printf '%s' "$_json" | jq -r '.[0].InstanceId // empty')
+  INST=$(printf '%s' "$_json" | jq -c '.[0] // {}')
+  if [ "$(printf '%s' "$_json" | jq -r length)" -gt 1 ]; then
+    warn "more than one instance is tagged $NAME; going with $ID"
+  fi
+}
+
+need_instance() {
+  find_instance
+  [ -n "$ID" ] || die "no instance named $NAME in $REGION; run 'chvm create'"
+}
+
+# fld .Some.Path -- a field of the instance json, empty rather than "null".
+fld() { printf '%s' "$INST" | jq -r "$1 // empty"; }
+
+ssm_state() {
+  _s=$(aws_ ssm describe-instance-information --filters "Key=InstanceIds,Values=$ID" \
+       --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || echo None)
+  [ "$_s" != None ] || _s=offline
+  printf '%s' "$_s"
+}
+
+ssm_online() { [ "$(ssm_state)" = Online ]; }
+
+# The agent both `create` reads keys from and `ssh` forwards. 1Password wins
+# when it is installed, because that is where the keys actually live.
+agent_sock() {
+  if [ -n "${CHVM_AGENT:-}" ]; then printf '%s' "$CHVM_AGENT"
+  elif [ -S "$OP_AGENT" ]; then printf '%s' "$OP_AGENT"
+  else printf '%s' "${SSH_AUTH_SOCK:-}"
+  fi
+}
+
+confirm() {
+  if [ -n "${CHVM_YES:-}" ]; then return 0; fi
+  ask "$1" n
+}
+
+# Brings the box up and waits until ssm answers for it: `create` and `ssh` both
+# need that much, and a cold boot takes a couple of minutes to get there.
+ensure_up() {
+  _st=$(fld .State.Name)
+  if [ "$_st" = stopping ]; then
+    note "waiting for $ID to finish stopping..."
+    aws_ ec2 wait instance-stopped --instance-ids "$ID"
+    _st=stopped
+  fi
+  if [ "$_st" = stopped ]; then
+    note "starting $ID..."
+    aws_ ec2 start-instances --instance-ids "$ID" >/dev/null
+    _st=pending
+  fi
+  if [ "$_st" != running ]; then
+    note "waiting for $ID to boot..."
+    aws_ ec2 wait instance-running --instance-ids "$ID"
+  fi
+  # Running only means it booted; the ssm agent registers a while later, and
+  # until it does there is no way in at all. 60 tries at 5s.
+  if ! ssm_online; then
+    note "waiting for ssm to answer for $ID..."
+    poll 60 ssm_online || die "$ID is not reachable over ssm"
+  fi
+}
+
+show_volumes() {
+  aws_ ec2 describe-volumes --filters "Name=attachment.instance-id,Values=$ID" \
+    --query 'Volumes[]' --output json |
+  jq -r --arg root "$(fld .RootDeviceName)" '
+    sort_by(.Attachments[0].Device // "")[] |
+    [ (.Attachments[0].Device // "-"),
+      "\(.Size) GB",
+      .VolumeType,
+      .VolumeId,
+      (if (.Attachments[0].Device // "") == $root then "root" else "data" end),
+      (if .Attachments[0].DeleteOnTermination then "auto-deleted" else "kept" end)
+    ] | @tsv' |
+  awk -F'\t' '{ printf "  %-10s %8s  %-5s %-24s %-5s %s\n", $1, $2, $3, $4, $5, $6 }'
+}
+
+cmd_status() {
+  need_instance
+  row name "$NAME"
+  row instance "$ID"
+  row state "$(fld .State.Name)"
+  row type "$(fld .InstanceType)"
+  row zone "$(fld .Placement.AvailabilityZone)"
+  row "private ip" "$(fld .PrivateIpAddress)"
+  _pub=$(fld .PublicIpAddress)
+  if [ -n "$_pub" ]; then row "public ip" "$_pub"; fi
+  row ssm "$(ssm_state)"
+  row launched "$(fld .LaunchTime)"
+  printf 'volumes\n'
+  show_volumes
+}
+
+# Pushes every key in the agent into the box's authorized_keys, over SSM --
+# there is no ssh in yet, and this is what makes there be one. Idempotent, so
+# rerunning `create` is also how you add a key you have loaded since.
+install_keys() {
+  _sock=$(agent_sock)
+  [ -n "$_sock" ] || die "no ssh agent to take keys from; unlock 1Password or set CHVM_AGENT"
+  _keys=$(SSH_AUTH_SOCK="$_sock" ssh-add -L 2>/dev/null || true)
+  [ -n "$_keys" ] || die "the agent at $_sock holds no keys; unlock 1Password, or ssh-add one"
+
+  _script=$(cat <<EOF
+set -e
+install -d -m 700 -o $LOGIN -g $LOGIN /home/$LOGIN/.ssh
+touch /home/$LOGIN/.ssh/authorized_keys
+while IFS= read -r key; do
+  [ -n "\$key" ] || continue
+  grep -qxF "\$key" /home/$LOGIN/.ssh/authorized_keys || printf '%s\n' "\$key" >> /home/$LOGIN/.ssh/authorized_keys
+done <<'CHVM_KEYS'
+$_keys
+CHVM_KEYS
+chown $LOGIN:$LOGIN /home/$LOGIN/.ssh/authorized_keys
+chmod 600 /home/$LOGIN/.ssh/authorized_keys
+EOF
+)
+
+  # The keys go in through a file: they are long, and quoting them onto the aws
+  # command line is a fight jq can just win for us.
+  _params=$(mktemp "${TMPDIR:-/tmp}/chvm-keys.XXXXXX")
+  jq -n --arg c "$_script" '{commands: [$c]}' >"$_params"
+  _cid=$(aws_ ssm send-command --instance-ids "$ID" \
+    --document-name AWS-RunShellScript \
+    --parameters "file://$_params" \
+    --comment "chvm: install ssh authorized keys" \
+    --timeout-seconds 120 \
+    --query 'Command.CommandId' --output text) || { rm -f "$_params"; die "ssm send-command failed"; }
+  rm -f "$_params"
+
+  _left=60
+  while :; do
+    _st=$(aws_ ssm get-command-invocation --command-id "$_cid" --instance-id "$ID" \
+          --query Status --output text 2>/dev/null || echo Pending)
+    case "$_st" in
+      Success)
+        note "authorized_keys holds $(printf '%s\n' "$_keys" | wc -l | tr -d ' ') key(s) from $_sock"
+        return 0 ;;
+      Failed|Cancelled|Cancelling|TimedOut)
+        aws_ ssm get-command-invocation --command-id "$_cid" --instance-id "$ID" \
+          --query StandardErrorContent --output text >&2 || :
+        die "installing the ssh key failed ($_st)" ;;
+    esac
+    _left=$((_left - 1))
+    [ "$_left" -gt 0 ] || die "timed out installing the ssh key"
+    sleep 2
+  done
+}
+
+cmd_create() {
+  _type="${1:-$TYPE}"
+  _gb="${2:-$ROOT_GB}"
+
+  find_instance
+  if [ -n "$ID" ]; then
+    note "$NAME already exists: $ID ($(fld .State.Name)); refreshing its ssh key"
+  else
+    step "choosing an image for $_type"
+    _arch=$(aws_ ec2 describe-instance-types --instance-types "$_type" \
+      --query 'InstanceTypes[0].ProcessorInfo.SupportedArchitectures[0]' --output text) ||
+      die "no instance type '$_type' in $REGION"
+    note "architecture $_arch"
+
+    if [ -n "${CHVM_AMI:-}" ]; then
+      _ami="$CHVM_AMI"
+      _root_dev=$(aws_ ec2 describe-images --image-ids "$_ami" \
+        --query 'Images[0].RootDeviceName' --output text) || die "no such image: $_ami"
+      note "ami $_ami"
+    else
+      _img=$(aws_ ec2 describe-images --owners self \
+        --filters "Name=is-public,Values=false" \
+                  "Name=state,Values=available" \
+                  "Name=tag:is-latest,Values=true" \
+                  "Name=architecture,Values=$_arch" \
+        --output json |
+        jq -r --arg pat "$AMI_PATTERN" '
+          # The pattern can sit in the name, the Name tag or the description.
+          def hay:
+            [ (.Name // ""),
+              ([.Tags[]? | select(.Key == "Name") | .Value] | join(" ")),
+              (.Description // "") ] | join(" ") | ascii_downcase;
+          [ .Images[] | select(hay | contains($pat | ascii_downcase)) ]
+          | sort_by(.CreationDate) | last
+          | select(. != null)
+          | [.ImageId, (.RootDeviceName // "/dev/sda1"), .Name, .CreationDate] | @tsv')
+      [ -n "$_img" ] || die "no private is-latest $AMI_PATTERN image for $_arch in $REGION"
+      _ami=$(printf '%s' "$_img" | cut -f1)
+      _root_dev=$(printf '%s' "$_img" | cut -f2)
+      note "ami $_ami ($(printf '%s' "$_img" | cut -f3), built $(printf '%s' "$_img" | cut -f4))"
+    fi
+
+    step "finding somewhere private to put it"
+    _vpc_name="development-$REGION-non-prod-main-vpc"
+    _vpc=$(aws_ ec2 describe-vpcs --filters "Name=tag:Name,Values=$_vpc_name" \
+      --query 'Vpcs[0].VpcId' --output text 2>/dev/null || true)
+    case "$_vpc" in
+      ""|None) die "no vpc named $_vpc_name in $REGION; try us-west-2, eu-west-1 or eu-central-1" ;;
+    esac
+    note "vpc $_vpc ($_vpc_name)"
+
+    # The emptiest private subnet, so a run does not land in one that is full.
+    _sub=$(aws_ ec2 describe-subnets --filters "Name=vpc-id,Values=$_vpc" --output json |
+      jq -r --arg prefix "development-$REGION-non-prod-private-" '
+        [ .Subnets[]
+          | . + {Name: ((.Tags // [] | map(select(.Key == "Name") | .Value) | first) // "")}
+          | select(.Name | startswith($prefix) and endswith("-subnet"))
+          | select((.AvailableIpAddressCount // 0) > 0) ]
+        | sort_by(.AvailableIpAddressCount) | last
+        | select(. != null) | [.SubnetId, .Name] | @tsv')
+    [ -n "$_sub" ] || die "no free development-$REGION-non-prod-private-*-subnet in $_vpc"
+    _subnet=$(printf '%s' "$_sub" | cut -f1)
+    note "subnet $_subnet ($(printf '%s' "$_sub" | cut -f2))"
+
+    _sg=$(aws_ ec2 describe-security-groups \
+      --filters "Name=vpc-id,Values=$_vpc" "Name=group-name,Values=default" \
+      --query 'SecurityGroups[0].GroupId' --output text)
+    case "$_sg" in ""|None) die "no default security group in $_vpc" ;; esac
+    note "security group $_sg (default)"
+
+    step "creating $NAME"
+    ID=$(aws_ ec2 run-instances \
+      --image-id "$_ami" \
+      --instance-type "$_type" \
+      --subnet-id "$_subnet" \
+      --security-group-ids "$_sg" \
+      --no-associate-public-ip-address \
+      --iam-instance-profile "Name=$SSM_PROFILE" \
+      --block-device-mappings "[{\"DeviceName\":\"$_root_dev\",\"Ebs\":{\"VolumeSize\":$_gb,\"VolumeType\":\"gp3\",\"Encrypted\":true,\"DeleteOnTermination\":true}}]" \
+      --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME}]" \
+      --query 'Instances[0].InstanceId' --output text)
+    note "$ID: $_type, $_gb GB root"
+  fi
+
+  step "waiting for $ID to answer"
+  ensure_up
+
+  step "installing your ssh key"
+  install_keys
+
+  step "$NAME is up"
+  note "get on it with: chvm ssh"
+}
+
+cmd_ssh() {
+  case "${1:-}" in --) shift ;; esac
+  need_instance
+  command -v session-manager-plugin >/dev/null ||
+    die "session-manager-plugin not found; brew install --cask session-manager-plugin"
+
+  ensure_up
+
+  _sock=$(agent_sock)
+  [ -n "$_sock" ] || warn "no ssh agent found; the box will not take your key"
+
+  # ssh wants its options ahead of the destination, so the arguments the caller
+  # passed after `--` are rotated back to the end once the list is built. $n is
+  # how many of them are sitting at the front while that happens.
+  n=$#
+
+  # First, so that anything in CHVM_SSH_OPTS wins: for -o, ssh keeps the first
+  # value it is given, not the last.
+  # shellcheck disable=SC2086
+  set -- "$@" ${CHVM_SSH_OPTS:-}
+
+  # No public address, so ssh gets there by handing its stream to SSM. %h is the
+  # instance id, which is why the destination below is the id and not a name.
+  set -- "$@" -o "ProxyCommand=aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p --region $REGION --profile $PROFILE"
+
+  # IdentityAgent picks the agent to authenticate with, and ForwardAgent sends
+  # that same one on, so 1Password's keys are usable from the box itself.
+  if [ -n "$_sock" ]; then set -- "$@" -o "IdentityAgent=$_sock"; fi
+  set -- "$@" -o ForwardAgent=yes
+
+  set -- "$@" -o TCPKeepAlive=yes -o ServerAliveInterval=30
+  # The host key belongs to an instance id that is only ever used once, so
+  # checking it buys nothing and pinning it would just rot in known_hosts.
+  set -- "$@" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
+
+  # Empty by default: word splitting is the point when CHVM_FORWARDS does name
+  # ports. A port already taken here only loses that one forward, not the session.
+  for _p in $FORWARDS; do set -- "$@" -L "$_p:localhost:$_p"; done
+
+  # StreamLocalBindUnlink so a socket left behind by a dropped session does not
+  # block the next one.
+  if [ -S "$HOME/.opener.sock" ]; then
+    set -- "$@" -o StreamLocalBindUnlink=yes -R "/home/$LOGIN/.opener.sock:$HOME/.opener.sock"
+  fi
+
+  set -- "$@" "$LOGIN@$ID"
+  while [ "$n" -gt 0 ]; do _a=$1; shift; set -- "$@" "$_a"; n=$((n - 1)); done
+
+  note "$NAME ($ID) over ssm"
+  TERM=xterm-256color exec ssh "$@"
+}
+
+volume_add() {
+  _gb="${1:-100}"
+  _vt="${2:-gp3}"
+  case "$(fld .State.Name)" in
+    running|stopped) ;;
+    *) die "$ID is $(fld .State.Name); attach a volume while it is running or stopped" ;;
+  esac
+  _az=$(fld .Placement.AvailabilityZone)
+
+  # The first free name in the range AWS recommends for extra volumes.
+  _dev=
+  _used=$(printf '%s' "$INST" | jq -r '[.BlockDeviceMappings[]?.DeviceName] | join(" ")')
+  for _l in f g h i j k l m n o p; do
+    case " $_used " in *" /dev/sd$_l "* | *" /dev/xvd$_l "*) continue ;; esac
+    _dev="/dev/sd$_l"; break
+  done
+  [ -n "$_dev" ] || die "no free device name between /dev/sdf and /dev/sdp on $ID"
+
+  _n=$(aws_ ec2 describe-volumes \
+    --filters "Name=attachment.instance-id,Values=$ID" "Name=tag-key,Values=chvm-role" \
+    --query 'length(Volumes)' --output text)
+  _name="$NAME-data-$((_n + 1))"
+
+  step "creating $_name: $_gb GB $_vt in $_az"
+  _vol=$(aws_ ec2 create-volume \
+    --availability-zone "$_az" --size "$_gb" --volume-type "$_vt" --encrypted \
+    --tag-specifications "ResourceType=volume,Tags=[{Key=Name,Value=$_name},{Key=chvm-role,Value=data},{Key=chvm-instance,Value=$ID}]" \
+    --query VolumeId --output text)
+  aws_ ec2 wait volume-available --volume-ids "$_vol"
+
+  step "attaching $_vol as $_dev"
+  aws_ ec2 attach-volume --volume-id "$_vol" --instance-id "$ID" --device "$_dev" >/dev/null
+  aws_ ec2 wait volume-in-use --volume-ids "$_vol"
+
+  # Tied to the instance's life by default, so `chvm delete` leaves nothing
+  # behind to keep paying for.
+  if [ -n "${CHVM_KEEP_VOLUME:-}" ]; then
+    warn "$_vol outlives the instance; delete it yourself with 'chvm volume rm $_vol'"
+  else
+    aws_ ec2 modify-instance-attribute --instance-id "$ID" \
+      --block-device-mappings "[{\"DeviceName\":\"$_dev\",\"Ebs\":{\"DeleteOnTermination\":true}}]"
+  fi
+
+  note "$_vol attached as $_dev, raw and unformatted"
+  note "on the box it turns up as /dev/nvmeXn1 -- check lsblk for the $_gb GB one"
+}
+
+volume_rm() {
+  _vol="${1:-}"
+  [ -n "$_vol" ] || die "which volume? run 'chvm volume' for the list"
+  _json=$(aws_ ec2 describe-volumes --volume-ids "$_vol" --query 'Volumes[0]' --output json) ||
+    die "no such volume: $_vol"
+  _dev=$(printf '%s' "$_json" | jq -r '.Attachments[0].Device // empty')
+  _att=$(printf '%s' "$_json" | jq -r '.Attachments[0].InstanceId // empty')
+  _size=$(printf '%s' "$_json" | jq -r '.Size')
+  [ "$_dev" != "$(fld .RootDeviceName)" ] || die "$_vol is the root volume; use 'chvm delete'"
+  [ -z "$_att" ] || [ "$_att" = "$ID" ] || warn "$_vol is attached to $_att, not to $NAME"
+
+  warn "unmount it and export any zpool on it first; its data goes with it"
+  confirm "delete $_vol ($_size GB${_dev:+, $_dev}) for good?" || die "left alone"
+  if [ -n "$_att" ]; then
+    step "detaching $_vol"
+    aws_ ec2 detach-volume --volume-id "$_vol" >/dev/null
+    aws_ ec2 wait volume-available --volume-ids "$_vol"
+  fi
+  step "deleting $_vol"
+  aws_ ec2 delete-volume --volume-id "$_vol"
+  note "$_vol is gone"
+}
+
+cmd_volume() {
+  _sub=list
+  if [ $# -gt 0 ]; then _sub="$1"; shift; fi
+  need_instance
+  case "$_sub" in
+    list|ls)    show_volumes ;;
+    add|create) volume_add "$@" ;;
+    rm|delete)  volume_rm "$@" ;;
+    *)          die "unknown volume command '$_sub' (try: list, add, rm)" ;;
+  esac
+}
+
+cmd_delete() {
+  need_instance
+  note "$NAME is $ID: $(fld .InstanceType), $(fld .State.Name), in $REGION"
+  # Anything not marked DeleteOnTermination stays behind, and stays billed.
+  _keep=$(aws_ ec2 describe-volumes --filters "Name=attachment.instance-id,Values=$ID" \
+    --query 'Volumes[?Attachments[0].DeleteOnTermination==`false`].VolumeId' --output text)
+  case "$_keep" in ""|None) _keep= ;; *) warn "these volumes will survive it: $_keep" ;; esac
+
+  confirm "terminate $ID?" || die "left alone"
+  step "terminating $ID"
+  aws_ ec2 terminate-instances --instance-ids "$ID" >/dev/null
+  aws_ ec2 wait instance-terminated --instance-ids "$ID"
+  note "$ID is gone"
+  [ -z "$_keep" ] || warn "still there, and still billed: $_keep"
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  status|st)  cmd_status "$@" ;;
+  create|new) cmd_create "$@" ;;
+  ssh)        cmd_ssh "$@" ;;
+  volume|vol) cmd_volume "$@" ;;
+  delete)     cmd_delete "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *)          die "unknown command '$cmd' (try: status, create, ssh, volume, delete)" ;;
+esac

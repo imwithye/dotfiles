@@ -1,0 +1,100 @@
+#!/bin/sh
+#
+# fix-parallels-route — repoint routes to Parallels VMs at their own bridges
+#
+#   fix-parallels-route             fix every Parallels network with a subnet
+#   fix-parallels-route <network>   fix just that one (e.g. Shared, Host-Only)
+#
+# Tailscale (and other system-wide VPNs) reassert a route for a VM's subnet
+# through the physical interface whenever routes churn -- toggling an exit
+# node is enough -- which shadows Parallels' own interface-scoped route and
+# leaves the VM unreachable. This adds the correct route back, pointed at
+# whatever bridge interface Parallels is actually using right now, or
+# overwrites the VPN's wrong one if it got there first. Nothing is hardcoded:
+# subnets and bridge names can differ per machine and per boot.
+#
+# One run covers every VM on a given network, not just one -- several VMs
+# sharing the default "Shared" network are all on the same subnet already.
+# Only VMs split across different network types (Shared vs Host-Only vs a
+# custom one) need their network named separately; Bridged networks have no
+# subnet of their own and are skipped.
+#
+#   fix-parallels-route             # every shared/host-only network at once
+#   fix-parallels-route Host-Only   # just that one
+#
+# Needs prlsrvctl (Parallels Desktop) to read subnets, and sudo to change
+# routes.
+
+set -eu
+
+. "$(dirname "$0")/shared.sh"
+
+case "${1:-}" in -h|--help|help) usage; exit 0 ;; esac
+
+command -v prlsrvctl >/dev/null 2>&1 || die "prlsrvctl not found -- is Parallels Desktop installed?"
+
+# fix_one net_id -- returns 1 on failure instead of dying, so one bad network
+# doesn't stop the rest from being fixed when running over all of them.
+fix_one() {
+  net_id="$1"
+
+  info=$(prlsrvctl net info "$net_id" 2>/dev/null) || { warn "no Parallels network named '$net_id'"; return 1; }
+  ip=$(printf '%s\n' "$info" | awk -F': ' '/IPv4 address/{print $2; exit}')
+  mask=$(printf '%s\n' "$info" | awk -F': ' '/IPv4 subnet mask/{print $2; exit}')
+  if [ -z "$ip" ] || [ -z "$mask" ]; then
+    warn "'$net_id' has no IPv4 host adapter (bridged network, or not running?)"
+    return 1
+  fi
+
+  # Network address = IP with the host bits zeroed, octet by octet: dividing
+  # by (256 - mask-octet) and scaling back up rounds each octet down to the
+  # start of its block, which is exactly what ANDing with the mask would do.
+  network=$(awk -v ip="$ip" -v mask="$mask" 'BEGIN {
+    split(ip, a, "."); split(mask, m, ".")
+    out = ""
+    for (i = 1; i <= 4; i++) {
+      step = 256 - m[i]
+      out = out (i > 1 ? "." : "") int(a[i] / step) * step
+    }
+    print out
+  }')
+
+  # The bridge interface's name (bridgeNNN) is assigned by macOS and shifts
+  # with whatever else is using bridge interfaces, so find it by the IP
+  # instead of assuming a number.
+  iface=$(ifconfig | awk -v ip="$ip" '
+    /^[a-zA-Z0-9]+:/ { cur = $1; sub(":", "", cur) }
+    $1 == "inet" && $2 == ip { print cur; exit }
+  ')
+  if [ -z "$iface" ]; then
+    warn "no interface on this Mac has $ip -- is '$net_id' running?"
+    return 1
+  fi
+
+  note "$net_id: $network/$mask via $iface"
+
+  # route(8) exits 0 even when the route is already there and it just printed
+  # "File exists", so the add attempt's exit status can't tell us which case
+  # we're in -- only its output can.
+  out=$(sudo route -n add -net "$network" -netmask "$mask" -interface "$iface" 2>&1)
+  if printf '%s\n' "$out" | grep -q "File exists"; then
+    sudo route -n change -net "$network" -netmask "$mask" -interface "$iface"
+    note "  route updated"
+  else
+    printf '%s\n' "$out"
+    note "  route added"
+  fi
+}
+
+if [ $# -ge 1 ]; then
+  fix_one "$1" || exit 1
+else
+  # Only shared/host-only networks have their own subnet worth fixing;
+  # bridged ones ride the physical network and need nothing done.
+  NET_IDS=$(prlsrvctl net list | awk 'NR > 1 && ($2 == "shared" || $2 == "host-only") { print $1 }')
+  [ -n "$NET_IDS" ] || die "no shared/host-only Parallels networks found"
+  fail=0
+  echo "$NET_IDS" | while IFS= read -r net_id; do
+    fix_one "$net_id" || fail=1
+  done
+fi
