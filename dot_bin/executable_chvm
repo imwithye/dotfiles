@@ -35,7 +35,9 @@
 # in and set the box up however you like.
 #
 # ssh uses the 1Password agent when its socket is there, and forwards it, so a
-# git push from the box signs with the same keys as one from here. No ports are
+# git push from the box signs with the same keys as one from here. Without one
+# it falls back to $SSH_AUTH_SOCK, and to ~/.ssh/id_*.pub when no agent has a
+# key to give -- 1Password is what it prefers, not what it needs. No ports are
 # forwarded unless you name some in CHVM_FORWARDS; ~/.opener.sock is sent over
 # when this Mac has one.
 #
@@ -48,6 +50,7 @@
 #   CHVM_ROOT_GB       default root volume size     (default 200)
 #   CHVM_AMI           an AMI id, skipping the lookup
 #   CHVM_AGENT         ssh agent socket to use and forward
+#   CHVM_KEY           a .pub file for create to install, instead of an agent's
 #   CHVM_FORWARDS      ports to forward to localhost, e.g. '34675 8080'
 #   CHVM_SSH_OPTS      extra ssh options, e.g. '-D 1080'
 #   CHVM_KEEP_VOLUME   set so an added volume outlives the instance
@@ -204,11 +207,34 @@ cmd_status() {
 # Pushes every key in the agent into the box's authorized_keys, over SSM --
 # there is no ssh in yet, and this is what makes there be one. Idempotent, so
 # rerunning `create` is also how you add a key you have loaded since.
-install_keys() {
+# The public keys `create` puts on the box: whatever the agent is holding, and
+# failing that whatever is lying in ~/.ssh. CHVM_KEY names a file to use instead
+# of either. Only id_* is looked at, because those are also the ones ssh offers
+# by default -- installing a key ssh would never present is no use to anybody.
+public_keys() {
+  if [ -n "${CHVM_KEY:-}" ]; then
+    [ -r "$CHVM_KEY" ] || die "cannot read $CHVM_KEY"
+    note "key from $CHVM_KEY"
+    cat "$CHVM_KEY"
+    return 0
+  fi
   _sock=$(agent_sock)
-  [ -n "$_sock" ] || die "no ssh agent to take keys from; unlock 1Password or set CHVM_AGENT"
-  _keys=$(SSH_AUTH_SOCK="$_sock" ssh-add -L 2>/dev/null || true)
-  [ -n "$_keys" ] || die "the agent at $_sock holds no keys; unlock 1Password, or ssh-add one"
+  if [ -n "$_sock" ]; then
+    # An empty agent says "The agent has no identities." on stdout, so the
+    # output has to be looked at rather than just counted.
+    _k=$(SSH_AUTH_SOCK="$_sock" ssh-add -L 2>/dev/null || true)
+    case "$_k" in
+      *ssh-*) note "keys from the agent at $_sock"; printf '%s\n' "$_k"; return 0 ;;
+    esac
+  fi
+  _k=$(cat "$HOME"/.ssh/id_*.pub 2>/dev/null || true)
+  [ -n "$_k" ] || die "no key to install: unlock 1Password, ssh-add one, or set CHVM_KEY to a .pub file"
+  warn "no agent has a key; taking them from ~/.ssh/id_*.pub"
+  printf '%s\n' "$_k"
+}
+
+install_keys() {
+  _keys=$(public_keys)
 
   _script=$(cat <<EOF
 set -e
@@ -243,7 +269,7 @@ EOF
           --query Status --output text 2>/dev/null || echo Pending)
     case "$_st" in
       Success)
-        note "authorized_keys holds $(printf '%s\n' "$_keys" | wc -l | tr -d ' ') key(s) from $_sock"
+        note "authorized_keys holds $(printf '%s\n' "$_keys" | wc -l | tr -d ' ') key(s)"
         return 0 ;;
       Failed|Cancelled|Cancelling|TimedOut)
         aws_ ssm get-command-invocation --command-id "$_cid" --instance-id "$ID" \
@@ -377,7 +403,9 @@ cmd_ssh() {
 
   # IdentityAgent picks the agent to authenticate with, and ForwardAgent sends
   # that same one on, so 1Password's keys are usable from the box itself.
-  if [ -n "$_sock" ]; then set -- "$@" -o "IdentityAgent=$_sock"; fi
+  # The value is quoted because ssh tokenises it itself, and 1Password's socket
+  # lives under "Group Containers" -- unquoted, the space ends the option.
+  if [ -n "$_sock" ]; then set -- "$@" -o "IdentityAgent=\"$_sock\""; fi
   set -- "$@" -o ForwardAgent=yes
 
   set -- "$@" -o TCPKeepAlive=yes -o ServerAliveInterval=30
