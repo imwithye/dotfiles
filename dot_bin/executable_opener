@@ -34,6 +34,11 @@
 # The socket carries no reply: the shim writes a line and is done, so a link
 # opens here without the box waiting to hear how it went.
 #
+# Delete ~/.opener.sock and the listener notices within five seconds and quits,
+# so KeepAlive can start one that has a socket again. Nothing has to be done by
+# hand, and `launchctl kickstart -k gui/$(id -u)/local.opener` is there for the
+# impatient.
+#
 # Overrides:
 #
 #   OPENER_SOCK        the socket to listen on   (default ~/.opener.sock)
@@ -83,6 +88,15 @@ open_url() {
   fi
 }
 
+# Whether the path has a listener behind it, as opposed to being the file one
+# left when it went. Connecting to a socket nobody holds is refused at once,
+# and this sends nothing down the ones that answer, so a live listener sees a
+# connection open and close with no line on it, which is nothing at all.
+socket_live() {
+  [ -S "$SOCK" ] || return 1
+  : | nc -U -w 1 "$SOCK" >/dev/null 2>&1
+}
+
 # nc -k holds the listening socket open across connections and writes them all
 # to the one stdout, which is exactly the shape wanted: a line is a request, and
 # a client comes and goes without the loop noticing. umask makes the socket the
@@ -93,11 +107,17 @@ open_url() {
 # that command has gone, and nc never goes; waiting in `read` instead, a TERM
 # lands where the traps can see it and the socket is cleared on the way out.
 cmd_listen() {
+  # Starting a second one would unlink the first's path out from under it and
+  # leave that one listening on a socket nothing can name -- the very state the
+  # watchdog below exists to get out of. Refusing is kinder than curing.
+  ! socket_live || die "something is already listening on $SOCK"
   [ ! -e "$SOCK" ] || rm -f "$SOCK" || die "cannot clear $SOCK"
 
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/opener.XXXXXX") || die "no scratch directory"
   mkfifo "$TMP/lines" || die "cannot make a fifo in $TMP"
+  MAIN=$$
   cleanup() {
+    [ -z "${WD:-}" ] || kill "$WD" 2>/dev/null || :
     [ -z "${NC:-}" ] || kill "$NC" 2>/dev/null || :
     rm -f "$SOCK"
     rm -rf "$TMP"
@@ -110,6 +130,26 @@ cmd_listen() {
   umask 077
   nc -lkU "$SOCK" >"$TMP/lines" &
   NC=$!
+
+  # Deleting the path does not disturb nc: it holds the socket by a descriptor
+  # and goes on listening on one that has no name any more, so the job stays up
+  # and healthy to launchd while nothing on earth can reach it. The cure is to
+  # notice and leave, and let KeepAlive put a fresh one in its place.
+  #
+  # It waits for the path to appear before it starts watching for it to go, and
+  # gives up waiting after ten seconds, which is also the right answer: an nc
+  # that never bound is a listener that is not listening either way. All of that
+  # is in the background because nc does not run until the fifo has a reader,
+  # and the reader is the loop at the end of this function.
+  ( _n=0
+    until [ -S "$SOCK" ]; do
+      _n=$((_n + 1)); [ "$_n" -lt 100 ] || break
+      sleep 0.1
+    done
+    while [ -S "$SOCK" ]; do sleep 5; done
+    kill "$MAIN" 2>/dev/null || : ) &
+  WD=$!
+
   while IFS= read -r _line; do open_url "$_line"; done <"$TMP/lines"
   die "the listener stopped"
 }

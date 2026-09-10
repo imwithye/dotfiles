@@ -55,7 +55,9 @@
 # key to give -- 1Password is what it prefers, not what it needs. Port 31337
 # comes back to localhost, because that is where `dataplanectl login` waits for
 # its Okta callback and the browser is on this side; name any others you want in
-# CHVM_FORWARDS. ~/.opener.sock is sent over when this Mac has one.
+# CHVM_FORWARDS. ~/.opener.sock is sent over when this Mac has one, which is
+# `opener` listening: with it and the shim it prints installed on the box,
+# `xdg-open https://...` over there raises the tab over here.
 #
 # Overrides:
 #
