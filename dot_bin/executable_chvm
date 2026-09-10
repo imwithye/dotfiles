@@ -226,7 +226,15 @@ ssm_run() {
         return 0 ;;
       Failed|Cancelled|Cancelling|TimedOut)
         printf '%s' "$_inv" | jq -r '.StandardErrorContent // ""' >&2
-        warn "$_what failed on $ID"
+        # A box that has only just booted has an ssm agent that is Online but
+        # cannot yet fork a worker to run a document in. It answers with this
+        # and the script never starts, which is not the same thing as the
+        # script failing, and saying so sends the reader to the wrong place.
+        case "$(printf '%s' "$_inv" | jq -r '.StandardOutputContent // ""')" in
+          *"document process failed unexpectedly"*)
+            warn "$ID could not start the command to $_what; nothing ran" ;;
+          *) warn "$_what failed on $ID" ;;
+        esac
         return 1 ;;
     esac
     _left=$((_left - 1))
