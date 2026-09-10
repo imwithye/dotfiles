@@ -10,6 +10,8 @@
 #   chvm volume [list]              list the attached volumes
 #   chvm volume add [gb] [type]     create an extra EBS data volume and attach it
 #   chvm volume rm <volume-id>      detach and delete one of them
+#   chvm tailscale [setup]          put it on the tailnet, and print its name
+#   chvm tailscale delete           take it off the tailnet again
 #   chvm delete                     terminate the box
 #
 # A day with it:
@@ -18,6 +20,7 @@
 #   chvm ssh                     get on it and set it up yourself
 #   chvm ssh -- uptime           run one command and come straight back
 #   chvm status                  where it is, what it costs you, is ssm up
+#   chvm tailscale               put it on the tailnet, and ssh in without ssm
 #   chvm volume add 500          another 500 GB to put a zpool on
 #   chvm stop                    park it overnight, disks and all
 #   chvm delete                  throw it away
@@ -30,6 +33,18 @@
 # no ssh config either -- `chvm ssh` passes the whole thing on the command line
 # and leaves ~/.ssh/config alone. It finds the instance by its Name tag each
 # time, so there is no state file to go stale when you recreate the box.
+#
+# `chvm tailscale` is the other way in, and an optional one: it installs
+# tailscale on the box, logs it into your tailnet in a browser and turns on
+# tailscale ssh, after which `ssh ubuntu@<name>` reaches it from anywhere with
+# no ssm in the middle. Nothing else here depends on it, and `chvm ssh` keeps
+# working whether it is on or not. `chvm tailscale delete` undoes it, and
+# `chvm delete` runs that first.
+#
+# What it cannot do is delete the box's row from the tailnet: that needs an api
+# key, and personal ones are not allowed here. So the row is left in the admin
+# console for you to remove, and the next box may come up as <name>-2 until you
+# do -- `chvm tailscale` says so when it happens.
 #
 # Nothing is provisioned for you. `create` installs your ssh key and stops; ssh
 # in and set the box up however you like.
@@ -52,8 +67,9 @@
 #   CHVM_AMI           an AMI id, skipping the lookup
 #   CHVM_AGENT         ssh agent socket to use and forward
 #   CHVM_KEY           a .pub file for create to install, instead of an agent's
-#   CHVM_FORWARDS      ports forwarded to localhost (default 31337)
+#   CHVM_FORWARDS      ports forwarded to localhost (default 31337, empty none)
 #   CHVM_SSH_OPTS      extra ssh options, e.g. '-D 1080'
+#   CHVM_TS_NAME       its name on the tailnet      (default the Name tag)
 #   CHVM_KEEP_VOLUME   set so an added volume outlives the instance
 #   CHVM_YES           set to skip the delete confirmations
 
@@ -63,11 +79,13 @@ REGION="${CHVM_REGION:-us-west-2}"
 PROFILE="${CHVM_PROFILE:-Dev_AWS_Admin}"
 TYPE="${CHVM_TYPE:-m5.8xlarge}"
 ROOT_GB="${CHVM_ROOT_GB:-200}"
-FORWARDS="${CHVM_FORWARDS:-31337}"
+# No colon, so `CHVM_FORWARDS= chvm ssh` means none rather than the default.
+FORWARDS="${CHVM_FORWARDS-31337}"
 
 # Filled in by resolve_name, and blanked here so an exported NAME cannot stand
-# in for the instance's own.
+# in for the instance's own. TS_NAME is that same box on the tailnet.
 NAME=
+TS_NAME=
 
 # The instance profile that lets SSM talk to the box; without it there is no
 # way in at all, since the box has no public address.
@@ -79,11 +97,27 @@ AMI_PATTERN="${CHVM_AMI_PATTERN:-clickhouse-dev}"
 LOGIN=ubuntu
 # 1Password's agent, if this Mac has one.
 OP_AGENT="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+# `tailscale up` has to outlive the ssm command that starts it: it blocks until
+# someone approves the login, and the url to approve is in its own output. So it
+# goes into a transient unit of its own, writing to a file this end reads back.
+TS_UNIT=chvm-tailscale-up
+TS_LOG=/var/tmp/chvm-tailscale-up.log
+TS_MARK=CHVM_LOG_FOLLOWS
+TS_API=https://api.tailscale.com
 
 . "$(dirname "$0")/shared.sh"
 
 command -v aws >/dev/null || die "aws not found in PATH"
 command -v jq >/dev/null || die "jq not found in PATH"
+
+# One scratch directory instead of an mktemp per call: the polling loops make a
+# couple of files a second, and `chvm tailscale` tells you ^C is safe. INT and
+# TERM clean up and then leave, because a handler that returns would carry on
+# as though nothing had happened.
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/chvm.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"; exit 130' INT
+trap 'rm -rf "$TMP"; exit 143' TERM
 
 aws_() { aws "$@" --region "$REGION" --profile "$PROFILE"; }
 row() { printf '%-12s %s\n' "$1" "$2"; }
@@ -92,27 +126,46 @@ row() { printf '%-12s %s\n' "$1" "$2"; }
 # firstname-lastname -- the same identifier the old make flow used, so a box
 # created by that one is still found by this.
 resolve_name() {
-  [ -z "$NAME" ] || return 0
-  if [ -n "${CHVM_NAME:-}" ]; then NAME="$CHVM_NAME"; return 0; fi
-  _arn=$(aws_ sts get-caller-identity --query Arn --output text 2>/dev/null) ||
-    die "not signed in; run: aws sso login --profile $PROFILE"
-  NAME=$(printf '%s\n' "$_arn" | sed 's|.*/||; s|@.*||' | tr '.' '-' | tr '[:upper:]' '[:lower:]')
-  [ -n "$NAME" ] || die "could not read a user name out of $_arn; set CHVM_NAME"
-  NAME="$NAME-dp-dev"
+  if [ -z "$NAME" ]; then
+    if [ -n "${CHVM_NAME:-}" ]; then
+      NAME="$CHVM_NAME"
+    else
+      _arn=$(aws_ sts get-caller-identity --query Arn --output text 2>/dev/null) ||
+        die "not signed in; run: aws sso login --profile $PROFILE"
+      NAME=$(printf '%s\n' "$_arn" | sed 's|.*/||; s|@.*||' | tr '.' '-' | tr '[:upper:]' '[:lower:]')
+      [ -n "$NAME" ] || die "could not read a user name out of $_arn; set CHVM_NAME"
+      NAME="$NAME-dp-dev"
+    fi
+  fi
+  # It is interpolated into ec2 tag shorthand, which a comma, a space or a
+  # bracket ends early and silently.
+  case "$NAME" in
+    ""|*[!A-Za-z0-9._-]*) die "the box's name must be letters, digits, dot, dash or underscore, not '$NAME'" ;;
+  esac
+  # The same name serves on the tailnet: it is already a dns label, and one
+  # name for the box in both places is one less thing to keep in step.
+  TS_NAME="${CHVM_TS_NAME:-$NAME}"
 }
 
 # Sets $INST to the instance's json and $ID to its id; $ID is empty when there
 # is no box. Terminated ones are ignored, so a delete followed by a create sees
-# a clean slate even while the old id is still listed.
+# a clean slate even while the old id is still listed. One still shutting down
+# is not ignored -- it holds the Name tag until it is gone, and building a
+# second box behind its back is what makes every later command ambiguous -- but
+# it never stands in for a live one.
 find_instance() {
   resolve_name
   _json=$(aws_ ec2 describe-instances \
     --filters "Name=tag:Name,Values=$NAME" \
-              "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+              "Name=instance-state-name,Values=pending,running,stopping,stopped,shutting-down" \
     --query 'Reservations[].Instances[]' --output json) || exit 1
-  ID=$(printf '%s' "$_json" | jq -r '.[0].InstanceId // empty')
-  INST=$(printf '%s' "$_json" | jq -c '.[0] // {}')
-  if [ "$(printf '%s' "$_json" | jq -r length)" -gt 1 ]; then
+  INST=$(printf '%s' "$_json" |
+    jq -c '(map(select(.State.Name != "shutting-down")) + .) | .[0] // {}')
+  ID=$(printf '%s' "$INST" | jq -r '.InstanceId // empty')
+  # Counting what was chosen between, not everything returned: one box on its
+  # way out alongside one live box is not an ambiguity, it is the case above.
+  if [ "$(printf '%s' "$_json" |
+      jq -r '[.[] | select(.State.Name != "shutting-down")] | length')" -gt 1 ]; then
     warn "more than one instance is tagged $NAME; going with $ID"
   fi
 }
@@ -134,6 +187,52 @@ ssm_state() {
 
 ssm_online() { [ "$(ssm_state)" = Online ]; }
 
+# ssm_run "what it is" "a shell script" [seconds] -- runs the script on the box
+# as root and leaves its stdout in $SSM_OUT. Everything that has to happen on
+# the box before there is an ssh into it goes this way. It warns and returns
+# non-zero instead of dying, so a caller that can live without it may.
+SSM_OUT=
+ssm_run() {
+  _what="$1"; _sh="$2"; _secs="${3:-120}"
+  SSM_OUT=
+
+  # The script goes in through a file: it is long and full of quotes, and
+  # getting it onto the aws command line intact is a fight jq can just win.
+  _params="$TMP/params"
+  jq -n --arg c "$_sh" '{commands: [$c]}' >"$_params" ||
+    { warn "could not build the command to $_what"; return 1; }
+  _cid=$(aws_ ssm send-command --instance-ids "$ID" \
+    --document-name AWS-RunShellScript \
+    --parameters "file://$_params" \
+    --comment "chvm: $_what" \
+    --timeout-seconds "$_secs" \
+    --query 'Command.CommandId' --output text) ||
+    { warn "could not $_what on $ID"; return 1; }
+
+  # The invocation is not there the instant the command is sent, so the first
+  # few misses are just that. Past those aws is not going to come right on its
+  # own, and sitting out the whole window would report it as a timeout.
+  _left=$((_secs / 2 + 30))
+  _misses=0
+  while :; do
+    _inv=$(aws_ ssm get-command-invocation --command-id "$_cid" --instance-id "$ID" \
+      --output json 2>/dev/null) || { _inv='{}'; _misses=$((_misses + 1)); }
+    [ "$_misses" -le 5 ] || { warn "$ID stopped answering about: $_what"; return 1; }
+    case "$(printf '%s' "$_inv" | jq -r '.Status // "Pending"')" in
+      Success)
+        SSM_OUT=$(printf '%s' "$_inv" | jq -r '.StandardOutputContent // ""')
+        return 0 ;;
+      Failed|Cancelled|Cancelling|TimedOut)
+        printf '%s' "$_inv" | jq -r '.StandardErrorContent // ""' >&2
+        warn "$_what failed on $ID"
+        return 1 ;;
+    esac
+    _left=$((_left - 1))
+    [ "$_left" -gt 0 ] || { warn "timed out waiting to $_what on $ID"; return 1; }
+    sleep 2
+  done
+}
+
 # The agent both `create` reads keys from and `ssh` forwards. 1Password wins
 # when it is installed, because that is where the keys actually live.
 agent_sock() {
@@ -152,6 +251,10 @@ confirm() {
 # need that much, and a cold boot takes a couple of minutes to get there.
 ensure_up() {
   _st=$(fld .State.Name)
+  case "$_st" in
+    shutting-down|terminated)
+      die "$ID is $_st; wait for it to go, and 'chvm create' will make a new one" ;;
+  esac
   if [ "$_st" = stopping ]; then
     note "waiting for $ID to finish stopping..."
     aws_ ec2 wait instance-stopped --instance-ids "$ID"
@@ -174,11 +277,24 @@ ensure_up() {
   fi
 }
 
+# The aws call is its own statement, not the head of a pipe: a pipeline takes
+# awk's exit status, so an expired session would print an empty list and a
+# clean 0, which reads exactly like a box with nothing attached.
+# The volumes attached to the box, as json. Callers say `|| die` for
+# themselves rather than have this do it: `set -e` is what would carry an exit
+# out of the command substitution, and `set -e` is off inside a condition.
+# They also assign it and pipe the variable, never pipe this directly, because
+# a pipeline takes jq's status and an aws that failed would then read as a box
+# with nothing attached.
+attached_volumes() {
+  aws_ ec2 describe-volumes --filters "Name=attachment.instance-id,Values=$ID" --output json
+}
+
 show_volumes() {
-  aws_ ec2 describe-volumes --filters "Name=attachment.instance-id,Values=$ID" \
-    --query 'Volumes[]' --output json |
+  _vols=$(attached_volumes) || die "could not list the volumes on $ID"
+  printf '%s' "$_vols" |
   jq -r --arg root "$(fld .RootDeviceName)" '
-    sort_by(.Attachments[0].Device // "")[] |
+    .Volumes | sort_by(.Attachments[0].Device // "")[] |
     [ (.Attachments[0].Device // "-"),
       "\(.Size) GB",
       .VolumeType,
@@ -222,10 +338,12 @@ public_keys() {
   _sock=$(agent_sock)
   if [ -n "$_sock" ]; then
     # An empty agent says "The agent has no identities." on stdout, so the
-    # output has to be looked at rather than just counted.
+    # output has to be looked at rather than just counted. What is looked for
+    # is the base64 blob every public key carries, because the type in front of
+    # it is not always an "ssh-" one: ecdsa-sha2-nistp256 is a key too.
     _k=$(SSH_AUTH_SOCK="$_sock" ssh-add -L 2>/dev/null || true)
     case "$_k" in
-      *ssh-*) note "keys from the agent at $_sock"; printf '%s\n' "$_k"; return 0 ;;
+      *" AAAA"*) note "keys from the agent at $_sock"; printf '%s\n' "$_k"; return 0 ;;
     esac
   fi
   _k=$(cat "$HOME"/.ssh/id_*.pub 2>/dev/null || true)
@@ -237,7 +355,7 @@ public_keys() {
 install_keys() {
   _keys=$(public_keys)
 
-  _script=$(cat <<EOF
+  _ak=$(cat <<EOF
 set -e
 install -d -m 700 -o $LOGIN -g $LOGIN /home/$LOGIN/.ssh
 touch /home/$LOGIN/.ssh/authorized_keys
@@ -249,109 +367,115 @@ $_keys
 CHVM_KEYS
 chown $LOGIN:$LOGIN /home/$LOGIN/.ssh/authorized_keys
 chmod 600 /home/$LOGIN/.ssh/authorized_keys
+wc -l < /home/$LOGIN/.ssh/authorized_keys
 EOF
 )
 
-  # The keys go in through a file: they are long, and quoting them onto the aws
-  # command line is a fight jq can just win for us.
-  _params=$(mktemp "${TMPDIR:-/tmp}/chvm-keys.XXXXXX")
-  jq -n --arg c "$_script" '{commands: [$c]}' >"$_params"
-  _cid=$(aws_ ssm send-command --instance-ids "$ID" \
-    --document-name AWS-RunShellScript \
-    --parameters "file://$_params" \
-    --comment "chvm: install ssh authorized keys" \
-    --timeout-seconds 120 \
-    --query 'Command.CommandId' --output text) || { rm -f "$_params"; die "ssm send-command failed"; }
-  rm -f "$_params"
+  ssm_run "install ssh authorized keys" "$_ak" 120 || die "installing the ssh key failed"
+  # Counted on the box: the append is idempotent, so what went up is not what
+  # the file holds -- pushing one key to a box that already had three is three.
+  note "authorized_keys holds $(printf '%s' "$SSM_OUT" | tr -dc '0-9') key(s)"
+}
 
-  _left=60
-  while :; do
-    _st=$(aws_ ssm get-command-invocation --command-id "$_cid" --instance-id "$ID" \
-          --query Status --output text 2>/dev/null || echo Pending)
-    case "$_st" in
-      Success)
-        note "authorized_keys holds $(printf '%s\n' "$_keys" | wc -l | tr -d ' ') key(s)"
-        return 0 ;;
-      Failed|Cancelled|Cancelling|TimedOut)
-        aws_ ssm get-command-invocation --command-id "$_cid" --instance-id "$ID" \
-          --query StandardErrorContent --output text >&2 || :
-        die "installing the ssh key failed ($_st)" ;;
-    esac
-    _left=$((_left - 1))
-    [ "$_left" -gt 0 ] || die "timed out installing the ssh key"
-    sleep 2
-  done
+# Sets $_ami and $_root_dev for an instance type. CHVM_AMI skips the lookup;
+# otherwise it is the newest private is-latest $AMI_PATTERN image for whatever
+# architecture the type runs.
+choose_image() {
+  _arch=$(aws_ ec2 describe-instance-types --instance-types "$1" \
+    --query 'InstanceTypes[0].ProcessorInfo.SupportedArchitectures[-1]' --output text) ||
+    die "no instance type '$1' in $REGION"
+  note "architecture $_arch"
+
+  if [ -n "${CHVM_AMI:-}" ]; then
+    _ami="$CHVM_AMI"
+    _root_dev=$(aws_ ec2 describe-images --image-ids "$_ami" \
+      --query 'Images[0].RootDeviceName' --output text) || die "no such image: $_ami"
+    note "ami $_ami"
+    return 0
+  fi
+
+  _imgs=$(aws_ ec2 describe-images --owners self \
+    --filters "Name=is-public,Values=false" \
+              "Name=state,Values=available" \
+              "Name=tag:is-latest,Values=true" \
+              "Name=architecture,Values=$_arch" \
+    --output json) || die "could not list the $AMI_PATTERN images in $REGION"
+  _img=$(printf '%s' "$_imgs" |
+    jq -r --arg pat "$AMI_PATTERN" '
+      # The pattern can sit in the name, the Name tag or the description.
+      def hay:
+        [ (.Name // ""),
+          ([.Tags[]? | select(.Key == "Name") | .Value] | join(" ")),
+          (.Description // "") ] | join(" ") | ascii_downcase;
+      [ .Images[] | select(hay | contains($pat | ascii_downcase)) ]
+      | sort_by(.CreationDate) | last
+      | select(. != null)
+      | [.ImageId, (.RootDeviceName // "/dev/sda1"), .Name, .CreationDate] | @tsv')
+  [ -n "$_img" ] || die "no private is-latest $AMI_PATTERN image for $_arch in $REGION"
+  _ami=$(printf '%s' "$_img" | cut -f1)
+  _root_dev=$(printf '%s' "$_img" | cut -f2)
+  note "ami $_ami ($(printf '%s' "$_img" | cut -f3), built $(printf '%s' "$_img" | cut -f4))"
+}
+
+# Sets $_subnet and $_sg: the emptiest private subnet in the region's non-prod
+# vpc, and that vpc's default security group.
+choose_placement() {
+  _vpc_name="development-$REGION-non-prod-main-vpc"
+  # Not swallowed: a lookup that failed on an expired session would send the
+  # caller off to try another region, which is not the problem.
+  _vpc=$(aws_ ec2 describe-vpcs --filters "Name=tag:Name,Values=$_vpc_name" \
+    --query 'Vpcs[0].VpcId' --output text) || die "could not look up $_vpc_name in $REGION"
+  case "$_vpc" in
+    ""|None) die "no vpc named $_vpc_name in $REGION; try us-west-2, eu-west-1 or eu-central-1" ;;
+  esac
+  note "vpc $_vpc ($_vpc_name)"
+
+  # The emptiest one, so a run does not land in a subnet that is full.
+  _subs=$(aws_ ec2 describe-subnets --filters "Name=vpc-id,Values=$_vpc" --output json) ||
+    die "could not list the subnets in $_vpc"
+  _sub=$(printf '%s' "$_subs" |
+    jq -r --arg prefix "development-$REGION-non-prod-private-" '
+      [ .Subnets[]
+        | . + {Name: ((.Tags // [] | map(select(.Key == "Name") | .Value) | first) // "")}
+        | select(.Name | startswith($prefix) and endswith("-subnet"))
+        | select((.AvailableIpAddressCount // 0) > 0) ]
+      | sort_by(.AvailableIpAddressCount) | last
+      | select(. != null) | [.SubnetId, .Name] | @tsv')
+  [ -n "$_sub" ] || die "no free development-$REGION-non-prod-private-*-subnet in $_vpc"
+  _subnet=$(printf '%s' "$_sub" | cut -f1)
+  note "subnet $_subnet ($(printf '%s' "$_sub" | cut -f2))"
+
+  _sg=$(aws_ ec2 describe-security-groups \
+    --filters "Name=vpc-id,Values=$_vpc" "Name=group-name,Values=default" \
+    --query 'SecurityGroups[0].GroupId' --output text)
+  case "$_sg" in ""|None) die "no default security group in $_vpc" ;; esac
+  note "security group $_sg (default)"
 }
 
 cmd_create() {
   _type="${1:-$TYPE}"
   _gb="${2:-$ROOT_GB}"
+  # It goes straight into the block-device json, where '200GB' comes back as an
+  # aws parse error about something the caller never typed.
+  case "$_gb" in ""|*[!0-9]*) die "the root size is a whole number of GB, not '$_gb'" ;; esac
 
   find_instance
+  # A box still shutting down keeps the Name tag, so building now would leave
+  # two of them wearing it. Wait it out and start clean.
+  if [ -n "$ID" ] && [ "$(fld .State.Name)" = shutting-down ]; then
+    note "$ID is still shutting down; waiting for it to go"
+    aws_ ec2 wait instance-terminated --instance-ids "$ID"
+    # Both halves, or ensure_up reads the dead box's state off $INST further
+    # down and refuses to wait for the new one on the strength of it.
+    ID= INST='{}'
+  fi
   if [ -n "$ID" ]; then
     note "$NAME already exists: $ID ($(fld .State.Name)); refreshing its ssh key"
   else
     step "choosing an image for $_type"
-    _arch=$(aws_ ec2 describe-instance-types --instance-types "$_type" \
-      --query 'InstanceTypes[0].ProcessorInfo.SupportedArchitectures[0]' --output text) ||
-      die "no instance type '$_type' in $REGION"
-    note "architecture $_arch"
-
-    if [ -n "${CHVM_AMI:-}" ]; then
-      _ami="$CHVM_AMI"
-      _root_dev=$(aws_ ec2 describe-images --image-ids "$_ami" \
-        --query 'Images[0].RootDeviceName' --output text) || die "no such image: $_ami"
-      note "ami $_ami"
-    else
-      _img=$(aws_ ec2 describe-images --owners self \
-        --filters "Name=is-public,Values=false" \
-                  "Name=state,Values=available" \
-                  "Name=tag:is-latest,Values=true" \
-                  "Name=architecture,Values=$_arch" \
-        --output json |
-        jq -r --arg pat "$AMI_PATTERN" '
-          # The pattern can sit in the name, the Name tag or the description.
-          def hay:
-            [ (.Name // ""),
-              ([.Tags[]? | select(.Key == "Name") | .Value] | join(" ")),
-              (.Description // "") ] | join(" ") | ascii_downcase;
-          [ .Images[] | select(hay | contains($pat | ascii_downcase)) ]
-          | sort_by(.CreationDate) | last
-          | select(. != null)
-          | [.ImageId, (.RootDeviceName // "/dev/sda1"), .Name, .CreationDate] | @tsv')
-      [ -n "$_img" ] || die "no private is-latest $AMI_PATTERN image for $_arch in $REGION"
-      _ami=$(printf '%s' "$_img" | cut -f1)
-      _root_dev=$(printf '%s' "$_img" | cut -f2)
-      note "ami $_ami ($(printf '%s' "$_img" | cut -f3), built $(printf '%s' "$_img" | cut -f4))"
-    fi
-
+    choose_image "$_type"
     step "finding somewhere private to put it"
-    _vpc_name="development-$REGION-non-prod-main-vpc"
-    _vpc=$(aws_ ec2 describe-vpcs --filters "Name=tag:Name,Values=$_vpc_name" \
-      --query 'Vpcs[0].VpcId' --output text 2>/dev/null || true)
-    case "$_vpc" in
-      ""|None) die "no vpc named $_vpc_name in $REGION; try us-west-2, eu-west-1 or eu-central-1" ;;
-    esac
-    note "vpc $_vpc ($_vpc_name)"
-
-    # The emptiest private subnet, so a run does not land in one that is full.
-    _sub=$(aws_ ec2 describe-subnets --filters "Name=vpc-id,Values=$_vpc" --output json |
-      jq -r --arg prefix "development-$REGION-non-prod-private-" '
-        [ .Subnets[]
-          | . + {Name: ((.Tags // [] | map(select(.Key == "Name") | .Value) | first) // "")}
-          | select(.Name | startswith($prefix) and endswith("-subnet"))
-          | select((.AvailableIpAddressCount // 0) > 0) ]
-        | sort_by(.AvailableIpAddressCount) | last
-        | select(. != null) | [.SubnetId, .Name] | @tsv')
-    [ -n "$_sub" ] || die "no free development-$REGION-non-prod-private-*-subnet in $_vpc"
-    _subnet=$(printf '%s' "$_sub" | cut -f1)
-    note "subnet $_subnet ($(printf '%s' "$_sub" | cut -f2))"
-
-    _sg=$(aws_ ec2 describe-security-groups \
-      --filters "Name=vpc-id,Values=$_vpc" "Name=group-name,Values=default" \
-      --query 'SecurityGroups[0].GroupId' --output text)
-    case "$_sg" in ""|None) die "no default security group in $_vpc" ;; esac
-    note "security group $_sg (default)"
+    choose_placement
 
     step "creating $NAME"
     ID=$(aws_ ec2 run-instances \
@@ -386,7 +510,9 @@ cmd_ssh() {
   ensure_up
 
   _sock=$(agent_sock)
-  [ -n "$_sock" ] || warn "no ssh agent found; the box will not take your key"
+  # ssh still gets in: with no IdentityAgent it offers ~/.ssh/id_*, which is
+  # what `create` installed in this same situation. What is lost is forwarding.
+  [ -n "$_sock" ] || warn "no ssh agent; ssh falls back to ~/.ssh/id_*, and nothing is forwarded"
 
   # ssh wants its options ahead of the destination, so the arguments the caller
   # passed after `--` are rotated back to the end once the list is built. $n is
@@ -419,22 +545,195 @@ cmd_ssh() {
   # one forward, not the session.
   for _p in $FORWARDS; do set -- "$@" -L "$_p:localhost:$_p"; done
 
-  # StreamLocalBindUnlink so a socket left behind by a dropped session does not
-  # block the next one.
+  # A socket left behind by a dropped session blocks the next -R onto the same
+  # path. StreamLocalBindUnlink is sent, but it is the client's own setting and
+  # the socket for a remote forward is created by sshd, which reads its own; so
+  # the leftover is cleared from over there instead. That is a round trip, and
+  # it is only taken when there is an opener to forward in the first place.
   if [ -S "$HOME/.opener.sock" ]; then
     set -- "$@" -o StreamLocalBindUnlink=yes -R "/home/$LOGIN/.opener.sock:$HOME/.opener.sock"
+    ssm_run "clear a stale opener socket" "rm -f /home/$LOGIN/.opener.sock" 60 ||
+      warn "the opener socket may not forward this time"
   fi
 
   set -- "$@" "$LOGIN@$ID"
   while [ "$n" -gt 0 ]; do _a=$1; shift; set -- "$@" "$_a"; n=$((n - 1)); done
 
   note "$NAME ($ID) over ssm"
+  # exec leaves nothing behind to run the EXIT trap, so the scratch goes first.
+  rm -rf "$TMP"
   TERM=xterm-256color exec ssh "$@"
+}
+
+# ------------------------------------------------------------- tailscale --
+
+# What tailscale on the box says about itself, and what it has written to its
+# login log, in one trip: $TS_STATE is its BackendState, $TS_HOST and $TS_IP
+# the name and address it holds on the tailnet, $TS_URL the login it is waiting
+# on, $TS_LOGTEXT the whole of what it has said. Every one of them comes back
+# empty when tailscale is not installed there, which is not a failure -- it is
+# the answer. One trip because this is polled, and each one costs a round trip.
+TS_STATE= TS_HOST= TS_IP= TS_URL= TS_LOGTEXT=
+ts_status() {
+  # --json is the only reliable read: `tailscale status` prints its complaints
+  # on stdout as well, and its exit code says nothing about which down it is.
+  # --peers=false, not --self: --self is on by default and does nothing, while
+  # the peer list it leaves in is unbounded -- and ssm hands back only the
+  # first 24,000 characters, which on a decent-sized tailnet cuts the marker
+  # off the end and makes every field below look empty.
+  ssm_run "read tailscale's state" "if command -v tailscale >/dev/null 2>&1; then
+  tailscale status --peers=false --json 2>/dev/null || true
+fi
+echo $TS_MARK
+cat $TS_LOG 2>/dev/null || true" 60 || return 1
+
+  # Cleared only now that there is an answer to replace them with. Both waits
+  # in setup poll through `ts_status || :`, and blanking these up front would
+  # let one hiccup on the last turn throw away the log the previous turn got --
+  # which is the very thing ts_log is there to print when the wait gives up.
+  TS_STATE= TS_HOST= TS_IP= TS_URL= TS_LOGTEXT=
+  _js=$(printf '%s\n' "$SSM_OUT" | sed "/^$TS_MARK\$/,\$d")
+  TS_LOGTEXT=$(printf '%s\n' "$SSM_OUT" | sed "1,/^$TS_MARK\$/d")
+  TS_URL=$(printf '%s' "$TS_LOGTEXT" |
+    grep -Eo 'https://login\.tailscale\.com/a/[0-9A-Za-z]+' | tail -n 1 || true)
+
+  case "$_js" in *'"BackendState"'*) ;; *) return 0 ;; esac
+  # Every caller reaches this through a condition, which turns `set -e` off for
+  # the whole of it -- so a jq that chokes has to be caught by hand, or it
+  # leaves the fields empty and reads as "tailscale is not installed".
+  TS_STATE=$(printf '%s' "$_js" | jq -r '.BackendState // empty') ||
+    { warn "tailscale on $ID answered with something that will not parse"; return 1; }
+  TS_HOST=$(printf '%s' "$_js" | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
+  TS_IP=$(printf '%s' "$_js" | jq -r '.Self.TailscaleIPs[0] // empty')
+  return 0
+}
+
+# On the tailnet and usable; every other state is a login left half done.
+ts_joined() { [ "$TS_STATE" = Running ] && [ -n "$TS_HOST" ]; }
+
+ts_show() {
+  row hostname "$TS_HOST"
+  [ -z "$TS_IP" ] || row ip "$TS_IP"
+}
+
+# Polls the box until it is on the tailnet: $1 tries, $2 seconds apart. With a
+# third argument it also stops as soon as tailscale offers a login url, which
+# is what the first wait in setup is really after.
+ts_wait() {
+  _tries="$1"
+  while :; do
+    ts_status || :
+    if ts_joined; then return 0; fi
+    if [ -n "${3:-}" ] && [ -n "$TS_URL" ]; then return 0; fi
+    _tries=$((_tries - 1))
+    [ "$_tries" -gt 0 ] || return 1
+    sleep "$2"
+  done
+}
+
+# Whatever tailscale said before it gave up, as of the last look: the login url
+# and every reason one never turned up are both in here.
+ts_log() {
+  [ -z "$TS_LOGTEXT" ] || printf '%s\n' "$TS_LOGTEXT" | tail -n 20 >&2
+}
+
+# Installs tailscale, logs the box in through your browser and turns on
+# tailscale ssh. Joined already, it says the name and stops -- so this is the
+# one command to run whether the box has ever seen the tailnet or not.
+cmd_ts_setup() {
+  need_instance
+  ensure_up
+
+  ts_status || die "could not read tailscale's state on $ID"
+  if ts_joined; then
+    note "$NAME is already on the tailnet"
+    ts_show
+    note "get on it with: ssh $LOGIN@$TS_HOST"
+    return 0
+  fi
+
+  step "installing tailscale on $ID"
+  ssm_run "install tailscale" 'set -e
+command -v tailscale >/dev/null 2>&1 || curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
+tailscale version | head -n 1' 600 || die "could not install tailscale on $ID"
+  note "tailscale ${SSM_OUT:-installed}"
+
+  step "logging $ID into your tailnet"
+  ssm_run "start the tailscale login" "set -e
+rm -f $TS_LOG
+systemctl stop $TS_UNIT.service >/dev/null 2>&1 || true
+# umask first: whoever opens that url owns the node, and this runs as root
+# under a default umask, which would leave ten minutes of world-readable
+# invitation sitting in /var/tmp for anyone else with a way onto the box.
+if command -v systemd-run >/dev/null 2>&1; then
+  systemd-run --unit=$TS_UNIT --collect /bin/sh -c 'umask 077; tailscale up --ssh --hostname=$TS_NAME >$TS_LOG 2>&1'
+else
+  (umask 077; nohup tailscale up --ssh --hostname=$TS_NAME >$TS_LOG 2>&1 &)
+fi" 60 || die "could not start tailscale on $ID"
+
+  # Two minutes of asking for a url, then ten of waiting for you to click it.
+  # The box may also come straight up, if its key has not expired yet.
+  ts_wait 40 2 url || :
+  if ! ts_joined; then
+    [ -n "$TS_URL" ] || { ts_log; die "tailscale on $ID neither joined nor asked to be let in"; }
+    step "open this, and let $NAME onto the tailnet"
+    printf '\n    %s\n\n' "$TS_URL"
+    note "waiting for you there; ^C is safe, 'chvm tailscale' picks it up again"
+    ts_wait 100 5 || :
+  fi
+
+  ts_joined || { ts_log; die "tailscale did not come up on $ID (state: ${TS_STATE:-unknown})"; }
+
+  step "$NAME is on the tailnet"
+  ts_show
+  case "$TS_HOST" in
+    "$TS_NAME".*) ;;
+    *) warn "it asked for $TS_NAME and was given $TS_HOST"
+       warn "an older row still holds the name; remove it at login.tailscale.com/admin/machines" ;;
+  esac
+  note "get on it with: ssh $LOGIN@$TS_HOST"
+  note "if that is refused, the tailnet's acl has to allow ssh to it as $LOGIN"
+}
+
+# Takes the box off the tailnet: it logs itself out, and the record it leaves
+# behind is deleted. The logout is unconditional -- it costs nothing on a box
+# that is already out, and `tailscale down` leaves a node logged in, so there
+# is no state worth reading first.
+ts_delete() {
+  find_instance
+  if [ -n "$ID" ] && [ "$(fld .State.Name)" = running ] && ssm_online; then
+    step "logging $ID out of the tailnet"
+    ssm_run "log out of tailscale" "systemctl stop $TS_UNIT.service >/dev/null 2>&1 || true
+tailscale logout >/dev/null 2>&1 || true" 120 || warn "could not log $ID out"
+  else
+    note "no box answering for $NAME; nothing to log out"
+  fi
+  # The row stays in the admin console either way: deleting it wants a tailnet
+  # api key, and there is none to be had here.
+  note "$TS_NAME keeps its row at login.tailscale.com/admin/machines; remove it there"
+}
+
+cmd_tailscale() {
+  resolve_name
+  # MagicDNS takes a dns label and nothing else, and it also lands in a jq
+  # regex in ts_devices.
+  case "$TS_NAME" in
+    ""|*[!A-Za-z0-9-]*) die "a tailnet name is letters, digits and dashes, not '$TS_NAME'" ;;
+  esac
+  _sub=setup
+  if [ $# -gt 0 ]; then _sub="$1"; shift; fi
+  case "$_sub" in
+    setup|up)  cmd_ts_setup ;;
+    delete|rm) ts_delete ;;
+    *)         die "unknown tailscale command '$_sub' (try: setup, delete)" ;;
+  esac
 }
 
 volume_add() {
   _gb="${1:-100}"
   _vt="${2:-gp3}"
+  case "$_gb" in ""|*[!0-9]*) die "the volume size is a whole number of GB, not '$_gb'" ;; esac
+  case "$_vt" in ""|*[!a-z0-9]*) die "'$_vt' is not an ebs volume type" ;; esac
   case "$(fld .State.Name)" in
     running|stopped) ;;
     *) die "$ID is $(fld .State.Name); attach a volume while it is running or stopped" ;;
@@ -487,9 +786,23 @@ volume_rm() {
   _dev=$(printf '%s' "$_json" | jq -r '.Attachments[0].Device // empty')
   _att=$(printf '%s' "$_json" | jq -r '.Attachments[0].InstanceId // empty')
   _size=$(printf '%s' "$_json" | jq -r '.Size')
-  [ "$_dev" != "$(fld .RootDeviceName)" ] || die "$_vol is the root volume; use 'chvm delete'"
-  [ -z "$_att" ] || [ "$_att" = "$ID" ] || warn "$_vol is attached to $_att, not to $NAME"
-
+  # Refused, not warned about: the check below only knows this box's root
+  # device name, so another instance's root volume -- /dev/xvda where ours is
+  # /dev/sda1 -- walks straight past it, and CHVM_YES means nobody is asked.
+  [ -z "$_att" ] || [ "$_att" = "$ID" ] ||
+    die "$_vol is attached to $_att, not to $NAME; remove it from there"
+  # Attached to nothing, there is nothing to check it against but the tag this
+  # script puts on the volumes it makes. Somebody else's disk is not ours to
+  # delete on the strength of a mistyped id.
+  [ -n "$_att" ] ||
+    [ "$(printf '%s' "$_json" | jq -r '[.Tags[]? | select(.Key == "chvm-role")] | length')" != 0 ] ||
+    die "$_vol is attached to nothing and was not made by chvm; leave it be"
+  # Both empty is not a match: with no box there is no root device to know,
+  # and an unattached volume has no device either, so comparing them plainly
+  # would call every kept volume the root one and refuse to remove it.
+  _root=$(fld .RootDeviceName)
+  [ -z "$_dev" ] || [ -z "$_root" ] || [ "$_dev" != "$_root" ] ||
+    die "$_vol is the root volume; use 'chvm delete'"
   warn "unmount it and export any zpool on it first; its data goes with it"
   confirm "delete $_vol ($_size GB${_dev:+, $_dev}) for good?" || die "left alone"
   if [ -n "$_att" ]; then
@@ -518,23 +831,33 @@ cmd_stop() {
   need_instance
   case "$(fld .State.Name)" in
     stopped)  note "$NAME is already stopped"; return 0 ;;
+    shutting-down|terminated) die "$ID is on its way out; there is nothing to stop" ;;
     stopping) note "$NAME is already stopping..." ;;
     *)        note "stopping $ID..."; aws_ ec2 stop-instances --instance-ids "$ID" >/dev/null ;;
   esac
   aws_ ec2 wait instance-stopped --instance-ids "$ID"
+  # jq adds them rather than JMESPath's sum(), which is a float and prints
+  # "260.0 GB". A lookup that failed says nothing rather than "its  GB".
   _gb=$(aws_ ec2 describe-volumes --filters "Name=attachment.instance-id,Values=$ID" \
-        --query 'sum(Volumes[].Size)' --output text 2>/dev/null || echo)
-  note "$ID is stopped; its ${_gb:-} GB of disk is still there, and still billed"
+        --query 'Volumes[].Size' --output json 2>/dev/null | jq -r 'add // empty') || _gb=
+  if [ -n "$_gb" ]; then
+    note "$ID is stopped; its $_gb GB of disk is still there, and still billed"
+  else
+    note "$ID is stopped; its disks are still there, and still billed"
+  fi
 }
 
 cmd_volume() {
   _sub=list
   if [ $# -gt 0 ]; then _sub="$1"; shift; fi
-  need_instance
   case "$_sub" in
-    list|ls)    show_volumes ;;
-    add|create) volume_add "$@" ;;
-    rm|delete)  volume_rm "$@" ;;
+    list|ls)    need_instance; show_volumes ;;
+    add|create) need_instance; volume_add "$@" ;;
+    # Not need_instance: a volume kept back with CHVM_KEEP_VOLUME outlives the
+    # box, and `volume add` tells you to come here to be rid of it. Its checks
+    # do the right thing with an empty $ID -- attached to anything at all is
+    # then attached to somebody else, and refused.
+    rm|delete)  find_instance; volume_rm "$@" ;;
     *)          die "unknown volume command '$_sub' (try: list, add, rm)" ;;
   esac
 }
@@ -542,16 +865,37 @@ cmd_volume() {
 cmd_delete() {
   need_instance
   note "$NAME is $ID: $(fld .InstanceType), $(fld .State.Name), in $REGION"
-  # Anything not marked DeleteOnTermination stays behind, and stays billed.
-  _keep=$(aws_ ec2 describe-volumes --filters "Name=attachment.instance-id,Values=$ID" \
-    --query 'Volumes[?Attachments[0].DeleteOnTermination==`false`].VolumeId' --output text)
-  case "$_keep" in ""|None) _keep= ;; *) warn "these volumes will survive it: $_keep" ;; esac
+
+  # Both halves, before the question is asked. `volume add` marks its volumes
+  # DeleteOnTermination by default, so the 500 GB zpool from the example in the
+  # header goes with the box -- and being told only what survives reads as an
+  # assurance that nothing else is at stake.
+  _vols=$(attached_volumes) || die "could not list the volumes on $ID"
+  _gone=$(printf '%s' "$_vols" | jq -r --arg root "$(fld .RootDeviceName)" '
+    [ .Volumes[]
+      | select(.Attachments[0].DeleteOnTermination == true)
+      | select((.Attachments[0].Device // "") != $root)
+      | "\(.VolumeId) (\(.Size) GB)" ] | join(", ")')
+  _keep=$(printf '%s' "$_vols" | jq -r '
+    [ .Volumes[] | select(.Attachments[0].DeleteOnTermination != true) | .VolumeId ] | join(" ")')
+  [ -z "$_gone" ] || warn "these go with it, and everything on them: $_gone"
+  [ -z "$_keep" ] || warn "these stay behind, and stay billed: $_keep"
 
   confirm "terminate $ID?" || die "left alone"
-  step "terminating $ID"
-  aws_ ec2 terminate-instances --instance-ids "$ID" >/dev/null
-  aws_ ec2 wait instance-terminated --instance-ids "$ID"
-  note "$ID is gone"
+
+  # Before the box goes, not after: logging it out needs it to still be there,
+  # and the record it would leave behind is what costs the next box its name.
+  # It warns about anything it could not do and never fails, so there is
+  # nothing to catch. It does look the box up again, though, so keep hold of
+  # the one that was confirmed: what gets terminated has to be what was asked
+  # about.
+  _doomed="$ID"
+  ts_delete
+
+  step "terminating $_doomed"
+  aws_ ec2 terminate-instances --instance-ids "$_doomed" >/dev/null
+  aws_ ec2 wait instance-terminated --instance-ids "$_doomed"
+  note "$_doomed is gone"
   [ -z "$_keep" ] || warn "still there, and still billed: $_keep"
 }
 
@@ -564,7 +908,8 @@ case "$cmd" in
   start|up)   cmd_start "$@" ;;
   stop|down)  cmd_stop "$@" ;;
   volume|vol) cmd_volume "$@" ;;
+  tailscale|ts) cmd_tailscale "$@" ;;
   delete)     cmd_delete "$@" ;;
   ""|-h|--help|help) usage ;;
-  *)          die "unknown command '$cmd' (try: status, create, ssh, stop, start, volume, delete)" ;;
+  *)          die "unknown command '$cmd' (try: status, create, ssh, stop, start, volume, tailscale, delete)" ;;
 esac
