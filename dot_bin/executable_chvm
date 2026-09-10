@@ -584,6 +584,10 @@ ts_status() {
   ssm_run "read tailscale's state" "if command -v tailscale >/dev/null 2>&1; then
   tailscale status --peers=false --json 2>/dev/null || true
 fi
+# The bare echo is load-bearing: tailscale's json ends without a newline, so
+# without it the marker shares a line with the closing brace, nothing below
+# matches it, and the log ends up being fed to jq as though it were json.
+echo
 echo $TS_MARK
 cat $TS_LOG 2>/dev/null || true" 60 || return 1
 
