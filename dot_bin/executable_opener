@@ -1,0 +1,215 @@
+#!/bin/sh
+#
+# opener — open links from an ssh box in the browser on this Mac
+#
+#   opener [listen]       listen on the socket and open what arrives
+#   opener install        keep listening from login on, as a launchd agent
+#   opener uninstall      stop that again
+#   opener shim           print the xdg-open to install on the far end
+#   opener send <url>     hand a url to the listener, to test the path
+#
+# A link printed by something on a remote box is a link on the wrong machine.
+# This is the near half of getting it back: a listener on ~/.opener.sock that
+# takes one url per line and hands it to `open`. `chvm ssh` already forwards
+# that socket to ~/.opener.sock on the box whenever it exists here, so with the
+# listener running and the shim installed over there, `xdg-open https://...`
+# on the box raises a tab on this Mac.
+#
+# The two halves, once:
+#
+#   opener install
+#   opener shim | chvm ssh -- 'mkdir -p ~/.local/bin &&
+#       cat >~/.local/bin/xdg-open && chmod +x ~/.local/bin/xdg-open'
+#
+# ~/.local/bin comes first in the PATH Ubuntu's ~/.profile builds, so the shim
+# shadows /usr/bin/xdg-open and everything that shells out to it -- gh, aws sso
+# login, dataplanectl -- follows. Programs that read $BROWSER instead want
+# `export BROWSER=xdg-open` in the box's shell rc; some read neither, and those
+# print the url for you to pipe in by hand.
+#
+# Only http and https are opened, and only as a single unspaced argument to
+# `open`, because the far end of that socket is a box and this end is a Mac
+# with everything on it. Anything else is refused and logged.
+#
+# The socket carries no reply: the shim writes a line and is done, so a link
+# opens here without the box waiting to hear how it went.
+#
+# Overrides:
+#
+#   OPENER_SOCK        the socket to listen on   (default ~/.opener.sock)
+#   OPENER_BROWSER     an application to open in (default your default browser)
+
+set -eu
+
+# The url is matched against character classes below, and in a UTF-8 locale a
+# class is a matter of what the bytes decode to; in C it is the bytes.
+LC_ALL=C
+export LC_ALL
+
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$DIR/shared.sh"
+
+SOCK="${OPENER_SOCK:-$HOME/.opener.sock}"
+LABEL=local.opener
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+LOG="$HOME/Library/Logs/opener.log"
+
+# ---------------------------------------------------------------- listen --
+
+# One url, as it came off the socket. Everything about it is suspect until it
+# has been through here: a scheme that is not the web can name a file or an
+# application, and a control character in one would be a control character in
+# the terminal this logs to. The length cap is only so a runaway writer cannot
+# fill the log. Bytes above ascii are left alone -- they reach `open` as one
+# argument whatever they are, and an idn url is a fair thing to be sent.
+open_url() {
+  _url=$(printf '%s' "$1" | tr -d '\r')
+  [ -n "$_url" ] || return 0
+
+  case "$_url" in
+    http://?*|https://?*) ;;
+    *) warn "refused, not an http url: $(printf '%.100s' "$_url")"; return 0 ;;
+  esac
+  case "$_url" in
+    *[[:cntrl:][:space:]]*) warn "refused, whitespace or control bytes in: $(printf '%.100s' "$_url" | tr -d '[:cntrl:]')"; return 0 ;;
+  esac
+  [ "${#_url}" -le 4096 ] || { warn "refused, too long: ${#_url} bytes"; return 0; }
+
+  note "opening $_url"
+  if [ -n "${OPENER_BROWSER:-}" ]; then
+    open -a "$OPENER_BROWSER" "$_url" || warn "open failed"
+  else
+    open "$_url" || warn "open failed"
+  fi
+}
+
+# nc -k holds the listening socket open across connections and writes them all
+# to the one stdout, which is exactly the shape wanted: a line is a request, and
+# a client comes and goes without the loop noticing. umask makes the socket the
+# user's own, since anything that can write to it can open a page here.
+#
+# Those lines come back over a fifo rather than the pipeline this obviously
+# wants to be. A shell waiting on an external command takes a signal only once
+# that command has gone, and nc never goes; waiting in `read` instead, a TERM
+# lands where the traps can see it and the socket is cleared on the way out.
+cmd_listen() {
+  [ ! -e "$SOCK" ] || rm -f "$SOCK" || die "cannot clear $SOCK"
+
+  TMP=$(mktemp -d "${TMPDIR:-/tmp}/opener.XXXXXX") || die "no scratch directory"
+  mkfifo "$TMP/lines" || die "cannot make a fifo in $TMP"
+  cleanup() {
+    [ -z "${NC:-}" ] || kill "$NC" 2>/dev/null || :
+    rm -f "$SOCK"
+    rm -rf "$TMP"
+  }
+  trap cleanup EXIT
+  trap 'cleanup; exit 130' INT
+  trap 'cleanup; exit 143' TERM
+
+  note "listening on $SOCK"
+  umask 077
+  nc -lkU "$SOCK" >"$TMP/lines" &
+  NC=$!
+  while IFS= read -r _line; do open_url "$_line"; done <"$TMP/lines"
+  die "the listener stopped"
+}
+
+# --------------------------------------------------------------- launchd --
+
+# KeepAlive covers the listener dying on its own; RunAtLoad starts it now and
+# at every login after. Both streams go to the log, because the only thing this
+# ever says is which url it opened and which it would not.
+cmd_install() {
+  mkdir -p "$(dirname "$PLIST")" "$(dirname "$LOG")"
+  cat >"$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$DIR/opener</string>
+    <string>listen</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$LOG</string>
+  <key>StandardErrorPath</key><string>$LOG</string>
+</dict>
+</plist>
+EOF
+
+  # bootout first so an install over a running one picks up the new plist.
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || :
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" || die "launchctl would not take $PLIST"
+  note "listening from now on; log in $LOG"
+  note "install the far half with: opener shim | chvm ssh -- 'mkdir -p ~/.local/bin && cat >~/.local/bin/xdg-open && chmod +x ~/.local/bin/xdg-open'"
+}
+
+cmd_uninstall() {
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || :
+  rm -f "$PLIST" "$SOCK"
+  note "stopped"
+}
+
+# ------------------------------------------------------------------ shim --
+
+# What goes on the box. It is written for whatever is over there: python3 is on
+# every Ubuntu image, socat and nc are not, and the openbsd nc that Debian ships
+# needs -N to hang up when its stdin ends where the Mac's exits on its own.
+cmd_shim() {
+  cat <<'EOF'
+#!/bin/sh
+#
+# xdg-open — hand the url to the Mac at the other end of the ssh session
+#
+# Installed by `opener shim` on the Mac; the socket is a remote forward that
+# `chvm ssh` sets up, so it is there for as long as that session is.
+
+set -eu
+
+SOCK="${OPENER_SOCK:-$HOME/.opener.sock}"
+
+[ $# -ge 1 ] || { echo "usage: xdg-open <url>" >&2; exit 2; }
+[ -S "$SOCK" ] || { echo "xdg-open: no opener socket at $SOCK" >&2; exit 1; }
+
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$SOCK" "$1" <<'PY'
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(5)
+s.connect(sys.argv[1])
+s.sendall(sys.argv[2].encode() + b"\n")
+s.close()
+PY
+elif command -v socat >/dev/null 2>&1; then
+  printf '%s\n' "$1" | socat - UNIX-CONNECT:"$SOCK"
+elif command -v nc >/dev/null 2>&1; then
+  printf '%s\n' "$1" | { nc -N -U "$SOCK" 2>/dev/null || nc -w 1 -U "$SOCK"; }
+else
+  echo "xdg-open: need python3, socat or nc to reach $SOCK" >&2
+  exit 1
+fi
+EOF
+}
+
+# ------------------------------------------------------------------ send --
+
+cmd_send() {
+  [ $# -ge 1 ] || die "usage: opener send <url>"
+  [ -S "$SOCK" ] || die "nothing is listening on $SOCK; run: opener install"
+  printf '%s\n' "$1" | nc -U "$SOCK" || die "could not reach $SOCK"
+}
+
+# ------------------------------------------------------------------ main --
+
+case "${1:-listen}" in
+  -h|--help|help) usage ;;
+  listen)    shift 2>/dev/null || :; cmd_listen ;;
+  install)   shift; cmd_install ;;
+  uninstall) shift; cmd_uninstall ;;
+  shim)      shift; cmd_shim ;;
+  send)      shift; cmd_send "$@" ;;
+  *) usage >&2; exit 2 ;;
+esac
