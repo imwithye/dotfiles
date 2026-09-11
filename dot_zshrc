@@ -26,6 +26,9 @@ test -d /home/linuxbrew/.linuxbrew && eval "$(/home/linuxbrew/.linuxbrew/bin/bre
 # Rustup
 test -d /opt/homebrew/opt/rustup/bin && export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 
+# Cargo
+test -d $HOME/.cargo && . "$HOME/.cargo/env"
+
 # Ruby
 test -d /opt/homebrew/opt/ruby/bin && export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
 
