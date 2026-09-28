@@ -42,6 +42,9 @@ test -d $HOME/.pub-cache/bin && export PATH="$PATH":"$HOME/.pub-cache/bin"
 # Tailscale
 test -d /Applications/Tailscale.app/Contents/MacOS && export PATH="$PATH":"/Applications/Tailscale.app/Contents/MacOS"
 
+# forgit
+[ -f $HOMEBREW_PREFIX/share/forgit/forgit.plugin.zsh ] && source $HOMEBREW_PREFIX/share/forgit/forgit.plugin.zsh
+
 # PATH
 export PATH=$HOME/bin:$HOME/.bin:$HOME/.local/bin:$PATH
 
