@@ -4,6 +4,7 @@ theme = "catppuccin_mocha"
 cursorline = true
 color-modes = true
 true-color = true
+clipboard-provider = "termcode"
 
 [editor.cursor-shape]
 normal = "block"
@@ -17,3 +18,9 @@ git-ignore = true
 [editor.indent-guides]
 render = true
 
+# Keep the internal yank register and also copy to the local terminal over SSH.
+[keys.normal]
+y = ["yank", "yank_to_clipboard"]
+
+[keys.select]
+y = ["yank", "yank_to_clipboard"]

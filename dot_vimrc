@@ -15,12 +15,42 @@ set autoindent smartindent
 set encoding=utf-8
 set backspace=indent,eol,start
 set noswapfile nobackup
-set clipboard=unnamed
+if has('clipboard')
+  set clipboard=unnamedplus
+endif
 set ttimeoutlen=10
 set termguicolors
 set fillchars=eob:\ ,vert:\ ,fold:·
 set laststatus=2
 set statusline=%#StatusMode#\ %{toupper(mode())}\ %#StatusLine#\ %f\ %m%r%=%y\ %l:%c\ %p%%
+
+" --- Terminal clipboard (OSC 52, including SSH and -clipboard Vim) ---
+" Keep Vim registers intact; send explicit yanks to the local terminal too.
+" tmux must have set-clipboard on to forward these writes.
+function! s:YankToTerminalClipboard() abort
+  if v:event.operator !=# 'y' || v:event.regname ==# '_' || !has('ttyout')
+    return
+  endif
+  let l:text = join(v:event.regcontents, "\n")
+  if v:event.regtype ==# 'V'
+    let l:text .= "\n"
+  endif
+  let l:encoded = substitute(system('base64', l:text), '\n', '', 'g')
+  if v:shell_error
+    echohl WarningMsg
+    echom 'Clipboard: base64 encoding failed; text remains in Vim registers.'
+    echohl None
+    return
+  endif
+  call writefile(["\e]52;c;" . l:encoded . "\x07"], '/dev/tty', 'b')
+endfunction
+
+augroup TerminalClipboard
+  autocmd!
+  if !has('gui_running') && exists('##TextYankPost') && executable('base64')
+    autocmd TextYankPost * call <SID>YankToTerminalClipboard()
+  endif
+augroup END
 
 " --- Shared helpers ---
 function! s:ProjectRoot()
