@@ -132,8 +132,10 @@ resolve_name() {
     if [ -n "${CHVM_NAME:-}" ]; then
       NAME="$CHVM_NAME"
     else
-      _arn=$(aws_ sts get-caller-identity --query Arn --output text 2>/dev/null) ||
-        die "not signed in; run: aws sso login --profile $PROFILE"
+      if ! _arn=$(aws_ sts get-caller-identity --query Arn --output text 2>"$TMP/identity-error"); then
+        sed '/./,$!d' "$TMP/identity-error" >&2
+        die "could not resolve AWS identity for profile $PROFILE; see the AWS error above"
+      fi
       NAME=$(printf '%s\n' "$_arn" | sed 's|.*/||; s|@.*||' | tr '.' '-' | tr '[:upper:]' '[:lower:]')
       [ -n "$NAME" ] || die "could not read a user name out of $_arn; set CHVM_NAME"
       NAME="$NAME-dp-dev"
