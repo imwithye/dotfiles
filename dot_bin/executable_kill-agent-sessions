@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Stop the current user's Codex/Claude processes without deleting session data.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: kill-agent-sessions [--dry-run] [--force] [--acp-only]
+
+Stop this user's Codex, Claude, and their common ACP adapter processes.
+Close Zed first to prevent agents from restarting. Run in a separate terminal
+on the machine/container where the agents run. Existing session files are kept.
+
+  -n, --dry-run   List matching processes without sending signals
+  -f, --force     Send SIGKILL instead of SIGTERM
+      --acp-only  Only match ACP adapters
+  -h, --help      Show this help
+
+Matches executable names, not arbitrary command arguments. Agents hosted by
+node/python or using other executable names may need to be stopped separately.
+Zed itself and unrelated agents are not terminated.
+EOF
+}
+
+dry_run=0
+acp_only=0
+signal=TERM
+for arg in "$@"; do
+  case "$arg" in
+    -n|--dry-run) dry_run=1 ;;
+    -f|--force) signal=KILL ;;
+    --acp-only) acp_only=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 'Unknown option: %s\n' "$arg" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+user_id=$(id -u)
+processes=$(ps -ax -o uid= -o pid= -o comm=)
+matched=0
+failed=0
+while read -r owner pid executable; do
+  [[ "$owner" == "$user_id" && "$pid" =~ ^[0-9]+$ ]] || continue
+  # Never terminate the container's init process.
+  [[ "$pid" -gt 1 ]] || continue
+  name=${executable##*/}
+  case "$name" in
+    codex|claude) [[ "$acp_only" == 0 ]] || continue ;;
+    codex-acp|claude-code-acp|claude-agent-acp|claude-agent-ac) ;;
+    *) continue ;;
+  esac
+  # Linux may truncate claude-agent-acp to the 15-character claude-agent-ac.
+  matched=$((matched + 1))
+  if [[ "$dry_run" == 1 ]]; then
+    printf 'Would send SIG%s to PID %s (%s)\n' "$signal" "$pid" "$name"
+  elif kill -s "$signal" "$pid" 2>/dev/null; then
+    printf 'Sent SIG%s to PID %s (%s)\n' "$signal" "$pid" "$name"
+  elif kill -0 "$pid" 2>/dev/null; then
+    printf 'Could not signal PID %s (%s)\n' "$pid" "$name" >&2
+    failed=1
+  else
+    printf 'PID %s (%s) already exited\n' "$pid" "$name"
+  fi
+done <<< "$processes"
+
+if [[ "$matched" == 0 ]]; then
+  printf 'No matching Codex/Claude processes for this user.\n'
+elif [[ "$dry_run" == 0 && "$signal" == TERM ]]; then
+  printf 'Signals sent. Check with --dry-run; use --force if processes remain stuck.\n'
+fi
+exit "$failed"
