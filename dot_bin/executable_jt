@@ -13,15 +13,16 @@ Each argument is a path, optionally named NAME=path; the header is NAME, or
 the path upper-cased.
 
 Paths use "." between keys, or "/" when a key itself contains dots:
-  components.executor.version
-  components/executor/platform.status
+  metadata.name
+  Config/Labels/com.docker.compose.service
 
 Missing or empty values print "-"; arrays are comma-joined; objects print as JSON.
 
 Examples:
-  dp-ra infra list | jt NAME=spoken_name state PLATFORM=platform.state EXEC=components.executor.version
-  dp-ra connector credentials list --org <org> | jq .keys | jt key_id label created_at revoked_at
-  jt -f outputs.json clicklink.value.cluster_name clicklink.value.vpc_id
+  gh pr list --json number,title,author | jt number title AUTHOR=author.login
+  kubectl get pods -o json | jq .items | jt NAME=metadata.name NODE=spec.nodeName PHASE=status.phase
+  docker inspect $(docker ps -q) | jt Name SERVICE=Config/Labels/com.docker.compose.service
+  jt -f package.json name version
 EOF
 }
 
