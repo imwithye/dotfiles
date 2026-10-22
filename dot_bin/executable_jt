@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# jt: JSON on stdin (an array, or one object) -> an aligned table of chosen fields.
+set -o pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: <json> | jt [NAME=]path ...
+
+Prints one row per array element (or one row for a single object), one column
+per argument. Each argument is a path, optionally named NAME=path; the header
+is NAME, or the path upper-cased.
+
+Paths use "." between keys, or "/" when a key itself contains dots:
+  components.executor.version
+  components/executor/platform.status
+
+Missing or empty values print "-"; arrays are comma-joined; objects print as JSON.
+
+Examples:
+  dp-ra infra list | jt NAME=spoken_name state PLATFORM=platform.state EXEC=components.executor.version
+  dp-ra connector credentials list --org <org> | jq .keys | jt key_id label created_at revoked_at
+EOF
+}
+
+case "${1:-}" in
+  -h | --help) usage; exit 0 ;;
+  "") usage >&2; exit 2 ;;
+esac
+
+missing=()
+command -v jq >/dev/null 2>&1 || missing+=(jq)
+command -v column >/dev/null 2>&1 || missing+=(column)
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "jt: missing ${missing[*]}; install with one of:" >&2
+  echo "  brew install ${missing[*]/column/util-linux}" >&2
+  echo "  sudo apt-get install ${missing[*]/column/bsdextrautils}" >&2
+  exit 127
+fi
+
+jq -r '
+  def cell:
+    if . == null then "-"
+    elif type == "string" then (if . == "" then "-" else gsub("[\t\n]"; " ") end)
+    elif type == "array" then (map(if type == "string" then . else tojson end) | join(","))
+    else tojson end;
+  ($ARGS.positional | map(
+    (if test("=") then {h: (split("=")[0]), p: (split("=")[1:] | join("="))} else {h: ., p: .} end)
+    | .k = (if (.p | test("/")) then (.p | split("/")) else (.p | split(".")) end))) as $cols
+  | ($cols | map(.h | ascii_upcase)),
+    ((if type == "array" then .[] else . end) as $row
+     | $cols | map(. as $c | $row | (try getpath($c.k) catch null) | cell))
+  | @tsv' --args "$@" | column -t -s $'\t'
