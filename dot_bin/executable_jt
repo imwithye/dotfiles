@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# jt: JSON on stdin (an array, or one object) -> an aligned table of chosen fields.
+# jt: JSON (an array, or one object) -> an aligned table of chosen fields.
 set -o pipefail
 
 usage() {
   cat <<'EOF'
 Usage: <json> | jt [NAME=]path ...
+       jt -f FILE [NAME=]path ...
 
-Prints one row per array element (or one row for a single object), one column
-per argument. Each argument is a path, optionally named NAME=path; the header
-is NAME, or the path upper-cased.
+Reads JSON from stdin, or from FILE with -f ("-f -" is stdin). Prints one row
+per array element (or one row for a single object), one column per argument.
+Each argument is a path, optionally named NAME=path; the header is NAME, or
+the path upper-cased.
 
 Paths use "." between keys, or "/" when a key itself contains dots:
   components.executor.version
@@ -19,13 +21,34 @@ Missing or empty values print "-"; arrays are comma-joined; objects print as JSO
 Examples:
   dp-ra infra list | jt NAME=spoken_name state PLATFORM=platform.state EXEC=components.executor.version
   dp-ra connector credentials list --org <org> | jq .keys | jt key_id label created_at revoked_at
+  jt -f outputs.json clicklink.value.cluster_name clicklink.value.vpc_id
 EOF
 }
 
-case "${1:-}" in
-  -h | --help) usage; exit 0 ;;
-  "") usage >&2; exit 2 ;;
-esac
+file=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage; exit 0 ;;
+    -f | --file)
+      [ $# -ge 2 ] || { echo "jt: $1 needs a file" >&2; exit 2; }
+      file=$2; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+if [ $# -eq 0 ]; then
+  usage >&2
+  exit 2
+fi
+
+if [ -n "$file" ] && [ "$file" != "-" ]; then
+  [ -r "$file" ] || { echo "jt: cannot read $file" >&2; exit 2; }
+  exec <"$file"
+elif [ -z "$file" ] && [ -t 0 ]; then
+  # Without this, jq would sit waiting for JSON typed at the terminal.
+  echo "jt: no JSON on stdin; pipe it in (cmd | jt ...) or pass -f FILE" >&2
+  exit 2
+fi
 
 missing=()
 command -v jq >/dev/null 2>&1 || missing+=(jq)
@@ -37,7 +60,15 @@ if [ ${#missing[@]} -gt 0 ]; then
   exit 127
 fi
 
-jq -r '
+input=$(cat)
+if [ -z "${input//[[:space:]]/}" ]; then
+  # An empty pipe is usually the command before | failing; say so instead of
+  # printing nothing at all.
+  echo "jt: empty input (did the command before | fail?)" >&2
+  exit 1
+fi
+
+printf '%s\n' "$input" | jq -r '
   def cell:
     if . == null then "-"
     elif type == "string" then (if . == "" then "-" else gsub("[\t\n]"; " ") end)
